@@ -25,6 +25,22 @@
 
     /* Prevent the MS CRT from expanding wildcards in command-line arguments. */
     int _CRT_glob = 0;
+
+    // BEGIN pvallet-modification
+    /* On most laptops, two graphics processors are available: one dedicated, and an integrated chipset.
+     * It allows to run desktop apps on the chipset, to prevent using too much battery.
+     * Games and other graphics-intensive apps are running on the dedicated card.
+     * This parameter allows us to request running on the dedicated card.
+     * It maximizes the chances for having a valid OpenGL profile and get better performance.
+     * 
+     * This only works when part of the executable, or statically linked to it, which is why we need to 
+     * manually modify pyinstaller's bootloader, and we can't rely on exposing those variables from a dynamically 
+     * loaded python module. To make that module work on your laptop in a development environment,
+     * you should open the nvidia config panel and select the appropriate graphics processor for Python.exe
+     */
+    __declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
+    __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+    // END pvallet-modification
 #endif
 
 #include <stdlib.h>
