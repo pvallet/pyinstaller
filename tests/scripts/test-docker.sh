@@ -1,6 +1,6 @@
-#!/bin/bash -ex
+#!/usr/bin/env bash
 #-----------------------------------------------------------------------------
-# Copyright (c) 2018-2021, PyInstaller Development Team.
+# Copyright (c) 2018-2023, PyInstaller Development Team.
 #
 # Distributed under the terms of the GNU General Public License (version 2
 # or later) with exception for distributing the bootloader.
@@ -24,6 +24,9 @@
 # Note: this functionality is contributed and not maintained
 # by the PyInstaller maintainers. If you find it useful,
 # please consider contributing to its maintenance and improvement.
+
+set -e
+set -x
 
 _args="py.test -n8 tests/functional"
 if [[ -n $1 ]]; then

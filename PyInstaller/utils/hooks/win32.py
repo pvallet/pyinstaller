@@ -1,5 +1,5 @@
 # ----------------------------------------------------------------------------
-# Copyright (c) 2005-2021, PyInstaller Development Team.
+# Copyright (c) 2005-2023, PyInstaller Development Team.
 #
 # Distributed under the terms of the GNU General Public License (version 2
 # or later) with exception for distributing the bootloader.
@@ -8,28 +8,23 @@
 #
 # SPDX-License-Identifier: (GPL-2.0-or-later WITH Bootloader-exception)
 # ----------------------------------------------------------------------------
-from ..hooks import exec_statement
 
-# NOTE: This function requires PyInstaller to be on the default "sys.path" for
-# the called Python process. Running py.test changes the working dir to a temp
-# dir, so PyInstaller should be installed via either "setup.py install" or
-# "setup.py develop" before running py.test.
+from PyInstaller import isolated
 
 
+@isolated.decorate
 def get_pywin32_module_file_attribute(module_name):
     """
-    Get the absolute path of the PyWin32 DLL specific to the PyWin32 module
-    with the passed name.
+    Get the absolute path of the PyWin32 DLL specific to the PyWin32 module with the passed name.
 
     On import, each PyWin32 module:
 
     * Imports a DLL specific to that module.
-    * Overwrites the values of all module attributes with values specific to
-      that DLL. This includes that module's `__file__` attribute, which then
-      provides the absolute path of that DLL.
+    * Overwrites the values of all module attributes with values specific to that DLL. This includes that module's
+      `__file__` attribute, which then provides the absolute path of that DLL.
 
-    This function safely imports that module in a PyWin32-aware subprocess and
-    returns the value of that module's `__file__` attribute.
+    This function safely imports that module in a PyWin32-aware subprocess and returns the value of that module's
+    `__file__` attribute.
 
     Parameters
     ----------
@@ -46,11 +41,6 @@ def get_pywin32_module_file_attribute(module_name):
     `PyInstaller.utils.win32.winutils.import_pywin32_module()`
         For further details.
     """
-    statement = """
-        from PyInstaller.utils.win32 import winutils
-        module = winutils.import_pywin32_module('%s')
-        print(module.__file__)
-    """
-    return exec_statement(statement % module_name)
-
-__all__ = ('get_pywin32_module_file_attribute', )
+    from PyInstaller.utils.win32 import winutils
+    module = winutils.import_pywin32_module(module_name)
+    return module.__file__

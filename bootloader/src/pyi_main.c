@@ -1,6 +1,6 @@
 /*
  * ****************************************************************************
- * Copyright (c) 2013-2021, PyInstaller Development Team.
+ * Copyright (c) 2013-2023, PyInstaller Development Team.
  *
  * Distributed under the terms of the GNU General Public License (version 2
  * or later) with exception for distributing the bootloader.
@@ -19,6 +19,13 @@
     #include <windows.h>
     #include <wchar.h>
 #endif
+#ifdef __CYGWIN__
+    #include <sys/cygwin.h>  /* cygwin_conv_path */
+    #include <windows.h>  /* SetDllDirectoryW */
+    /* NOTE: SetDllDirectoryW is part of KERNEL32, which is automatically
+     * linked by Cygwin, so we do not need to explicitly link any
+     * win32 libraries. */
+#endif
 #include <stdio.h>  /* FILE */
 #include <stdlib.h> /* calloc */
 #include <string.h> /* memset */
@@ -36,16 +43,51 @@
 #include "pyi_pythonlib.h"
 #include "pyi_launch.h"
 #include "pyi_win32_utils.h"
+#include "pyi_splash.h"
+#include "pyi_apple_events.h"
+
+
+static int
+_pyi_allow_pkg_sideload(const char *executable)
+{
+    FILE *file = NULL;
+    uint64_t magic_offset;
+    unsigned char magic[8];
+
+    /* First, find the PKG sideload signature in the executable */
+    file = pyi_path_fopen(executable, "rb");
+    if (!file) {
+        return -1;
+    }
+
+    /* Prepare magic pattern */
+    memcpy(magic, MAGIC_BASE, sizeof(magic));
+    magic[3] += 0x0D;  /* 0x00 -> 0x0D */
+
+    /* Find magic pattern in the executable */
+    magic_offset = pyi_utils_find_magic_pattern(file, magic, sizeof(magic));
+    if (magic_offset == 0) {
+        fclose(file);
+        return 1; /* Error code 1: no embedded PKG sideload signature */
+    }
+
+    /* TODO: expand the verification by embedding hash of the PKG file */
+
+    /* Allow PKG to be sideloaded */
+    return 0;
+}
 
 int
 pyi_main(int argc, char * argv[])
 {
     /*  archive_status contain status information of the main process. */
     ARCHIVE_STATUS *archive_status = NULL;
+    SPLASH_STATUS *splash_status = NULL;
     char executable[PATH_MAX];
     char homepath[PATH_MAX];
     char archivefile[PATH_MAX];
     int rc = 0;
+    int in_child = 0;
     char *extractionpath = NULL;
 
 #ifdef _MSC_VER
@@ -53,9 +95,9 @@ pyi_main(int argc, char * argv[])
     setbuf(stderr, (char *)NULL);
 #endif  /* _MSC_VER */
 
-    VS("PyInstaller Bootloader 3.x\n");
+    VS("PyInstaller Bootloader 5.x\n");
 
-    archive_status = pyi_arch_status_new(archive_status);
+    archive_status = pyi_arch_status_new();
     if (archive_status == NULL) {
         return -1;
     }
@@ -77,6 +119,26 @@ pyi_main(int argc, char * argv[])
 
     extractionpath = pyi_getenv("_MEIPASS2");
 
+    /* NOTE: record the in-child status here, because extractionpath
+     * might get overwritten later on (on Windows and macOS, single
+     * process is used for --onedir mode). */
+    in_child = (extractionpath != NULL);
+    if (in_child) {
+        /* Check if _PYI_ONEDIR_MODE is set to 1; this is set by linux/unix
+         * bootloaders when they restart themselves within the same process
+         * to achieve single-process onedir execution mode. This case should
+         * be treated as if extractionpath was not set at this point yet,
+         * i.e., in_child needs to be reset to 0. */
+        char *pyi_onedir_mode = pyi_getenv("_PYI_ONEDIR_MODE");
+        if (pyi_onedir_mode) {
+            if (strcmp(pyi_onedir_mode, "1") == 0) {
+                in_child = 0;
+            }
+            free(pyi_onedir_mode);
+            pyi_unsetenv("_PYI_ONEDIR_MODE");
+        }
+    }
+
     /* If the Python program we are about to run invokes another PyInstaller
      * one-file program as subprocess, this subprocess must not be fooled into
      * thinking that it is already unpacked. Therefore, PyInstaller deletes
@@ -87,11 +149,24 @@ pyi_main(int argc, char * argv[])
 
     VS("LOADER: _MEIPASS2 is %s\n", (extractionpath ? extractionpath : "NULL"));
 
-    if ((! pyi_arch_setup(archive_status, executable)) &&
-        (! pyi_arch_setup(archive_status, archivefile))) {
-            FATALERROR("Cannot open self %s or archive %s\n",
+    /* Try opening the archive; first attempt to read it from executable
+     * itself (embedded mode), then from a stand-alone pkg file (sideload mode)
+     */
+    if (!pyi_arch_setup(archive_status, executable, executable)) {
+        if (!pyi_arch_setup(archive_status, archivefile, executable)) {
+            FATALERROR("Cannot open PyInstaller archive from executable (%s) or external archive (%s)\n",
                        executable, archivefile);
             return -1;
+        } else if (extractionpath == NULL) {
+            /* Check if package side-load is allowed. But only on the first
+             * run, in the parent process (i.e., when extractionpath is not
+             * yet set). */
+            rc = _pyi_allow_pkg_sideload(executable);
+            if (rc != 0) {
+                FATALERROR("Cannot side-load external archive %s (code %d)!\n", archivefile, rc);
+                return -1;
+            }
+        }
     }
 
 #if defined(__linux__)
@@ -124,21 +199,98 @@ pyi_main(int argc, char * argv[])
         extractionpath = homepath;
     }
 
+#else
+
+    /* On other OSes (linux and unix-like), we also use single-process for
+     * --onedir mode. However, in contrast to Windows and macOS, we need to
+     * set environment (i.e., LD_LIBRARY_PATH) and then restart/replace the
+     * process via exec() without fork() for the environment changes (library
+     * search path) to take effect. */
+     if (!extractionpath && !pyi_launch_need_to_extract_binaries(archive_status)) {
+        VS("LOADER: No need to extract files to run; setting up environment and restarting bootloader...\n");
+
+        /* Set _MEIPASS2, so that the restarted bootloader process will enter
+         * the codepath that corresponds to child process. */
+        pyi_setenv("_MEIPASS2", homepath);
+
+        /* Set _PYI_ONEDIR_MODE to signal to restarted bootloader that it
+         * should reset in_child variable even though it is operating in
+         * child-process mode. This is necessary for splash screen to
+         * be shown. */
+        pyi_setenv("_PYI_ONEDIR_MODE", "1");
+
+        /* Set up the environment, especially LD_LIBRARY_PATH. This is the
+         * main reason we are going to restart the bootloader in the first
+         * place. */
+        if (pyi_utils_set_environment(archive_status) == -1) {
+            return -1;
+        }
+
+        /* Restart the process. The helper function performs exec() without
+         * fork(), so we never return from the call. */
+        if (pyi_utils_replace_process(executable, argc, argv) == -1) {
+            return -1;
+        }
+    }
+
 #endif
 
 
+#if defined(_WIN32) || defined(__CYGWIN__)
+    if (extractionpath) {
+        /* Add extraction folder to DLL search path */
+        wchar_t dllpath_w[PATH_MAX];
+#if defined(__CYGWIN__)
+        /* Cygwin */
+        if (cygwin_conv_path(CCP_POSIX_TO_WIN_W | CCP_RELATIVE, extractionpath, dllpath_w, PATH_MAX) != 0) {
+            FATAL_PERROR("cygwin_conv_path", "Failed to convert DLL search path!\n");
+            return -1;
+        }
+#else
+        /* Windows */
+        if (pyi_win32_utils_from_utf8(dllpath_w, extractionpath, PATH_MAX) == NULL) {
+            FATALERROR("Failed to convert DLL search path!\n");
+            return -1;
+        }
+#endif  /* defined(__CYGWIN__) */
+        VS("LOADER: SetDllDirectory(%S)\n", dllpath_w);
+        SetDllDirectoryW(dllpath_w);
+    }
+#endif  /* defined(_WIN32) || defined(__CYGWIN__) */
+
+    /*
+     * Check for splash screen resources.
+     * For the splash screen function to work PyInstaller
+     * needs to bundle tcl/tk with the application. This library
+     * is the same as tkinter uses.
+     */
+    splash_status = pyi_splash_status_new();
+
+    if (!in_child && pyi_splash_setup(splash_status, archive_status, NULL) == 0) {
+        /*
+         * Splash resources found, start splash screen
+         * If in onefile mode extract the required binaries
+         */
+        if ((!pyi_splash_extract(archive_status, splash_status)) &&
+            (!pyi_splash_attach(splash_status))) {
+            /* Everything was initialized, so it is safe to start
+             * the splash screen */
+            pyi_splash_start(splash_status, executable);
+        }
+        else {
+            /* Error attaching tcl/tk libraries.
+             * It may have happened that the libraries got (partly)
+             * loaded, so close them by finalizing the splash status */
+            pyi_splash_finalize(splash_status);
+            pyi_splash_status_free(&splash_status);
+        }
+    }
+    else {
+        /* No splash screen resources found */
+        pyi_splash_status_free(&splash_status);
+    }
 
     if (extractionpath) {
-        
-        #ifdef _WIN32
-        /* Add extraction folder to DLL search path */
-        wchar_t * dllpath_w;
-        dllpath_w = pyi_win32_utils_from_utf8(NULL, extractionpath, 0);
-        SetDllDirectory(dllpath_w);
-        VS("LOADER: SetDllDirectory(%s)\n", extractionpath);
-        free(dllpath_w);
-        #endif
-
         VS("LOADER: Already in the child - running user's code.\n");
 
         /*  If binaries were extracted to temppath,
@@ -158,16 +310,58 @@ pyi_main(int argc, char * argv[])
             strcpy(archive_status->mainpath, archive_status->temppath);
         }
 
+#if defined(__APPLE__) && defined(WINDOWED)
+        if (!in_child) {
+            /* Initialize argc_pyi and argv_pyi with argc and argv */
+            if (pyi_utils_initialize_args(archive_status->argc, archive_status->argv) < 0) {
+                return -1;
+            }
+            /* Optional argv emulation for onedir .app bundles */
+            if (pyi_arch_get_option(archive_status, "pyi-macos-argv-emulation") != NULL) {
+                /* Install event handlers */
+                pyi_apple_install_event_handlers();
+                /* Process Apple events; this updates argc_pyi/argv_pyi
+                 * accordingly */
+                pyi_apple_process_events(0.25);  /* short_timeout (250 ms) */
+                /* Uninstall event handlers */
+                pyi_apple_uninstall_event_handlers();
+                /* The processing of Apple events swallows up the initial
+                 * activation event, whatever it might have been (typically
+                 * oapp, but could also be odoc or GURL if application is
+                 * launched in response to request to open file/URL).
+                 * This seems to cause issues with some UI frameworks
+                 * (Tcl/Tk, in particular); so we submit a new oapp event
+                 * to ourselves...
+                 */
+                 pyi_apple_submit_oapp_event();
+            }
+            /* Update pointer to arguments; regardless of argv-emulation,
+             * because pyi_utils_initialize_args() also filters out
+             * -psn_xxx argument.
+             */
+            pyi_utils_get_args(&archive_status->argc, &archive_status->argv);
+        }
+#endif
+
         /* Main code to initialize Python and run user's code. */
         pyi_launch_initialize(archive_status);
         rc = pyi_launch_execute(archive_status);
         pyi_launch_finalize(archive_status);
 
+        /* Clean up splash screen resources; required when in single-process
+         * execution mode, i.e. when using --onedir on Windows or macOS. */
+        pyi_splash_finalize(splash_status);
+        pyi_splash_status_free(&splash_status);
+
+#if defined(__APPLE__) && defined(WINDOWED)
+        /* Clean up arguments that were used with Apple event processing .*/
+        pyi_utils_free_args();
+#endif
     }
     else {
 
         /* status->temppath is created if necessary. */
-        if (pyi_launch_extract_binaries(archive_status)) {
+        if (pyi_launch_extract_binaries(archive_status, splash_status)) {
             VS("LOADER: temppath is %s\n", archive_status->temppath);
             VS("LOADER: Error extracting binaries\n");
             return -1;
@@ -207,11 +401,21 @@ pyi_main(int argc, char * argv[])
 
         VS("LOADER: Doing cleanup\n");
 
+        /* Finalize splash screen before temp directory gets wiped, since the splash
+         * screen might hold handles to shared libraries inside the temp dir. Those
+         * wouldn't be removed, leaving the temp folder behind. */
+        pyi_splash_finalize(splash_status);
+        pyi_splash_status_free(&splash_status);
+
         if (archive_status->has_temp_directory == true) {
             pyi_remove_temp_path(archive_status->temppath);
         }
         pyi_arch_status_free(archive_status);
 
+        /* Re-raise child's signal, if necessary (non-Windows only) */
+#ifndef _WIN32
+        pyi_utils_reraise_child_signal();
+#endif
     }
     return rc;
 }

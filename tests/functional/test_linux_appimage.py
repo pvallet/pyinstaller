@@ -1,5 +1,5 @@
 #-----------------------------------------------------------------------------
-# Copyright (c) 2005-2021, PyInstaller Development Team.
+# Copyright (c) 2005-2023, PyInstaller Development Team.
 #
 # Distributed under the terms of the GNU General Public License (version 2
 # or later) with exception for distributing the bootloader.
@@ -8,17 +8,15 @@
 #
 # SPDX-License-Identifier: (GPL-2.0-or-later WITH Bootloader-exception)
 #-----------------------------------------------------------------------------
-
 """
 GNU/Linux-specific test to check the bootloader from the AppImage.
 """
 
-# Library imports
-# ---------------
 import os
 import pathlib
 import stat
 import subprocess
+
 import pytest
 
 
@@ -27,7 +25,7 @@ import pytest
 def test_appimage_loading(tmp_path, pyi_builder_spec, arch):
     # Skip the test if appimagetool is not found
     appimagetool = pathlib.Path.home() / ('appimagetool-%s.AppImage' % arch)
-    if appimagetool.is_file():
+    if not appimagetool.is_file():
         pytest.skip('%s not found' % appimagetool)
 
     # Ensure appimagetool is executable
@@ -39,18 +37,16 @@ def test_appimage_loading(tmp_path, pyi_builder_spec, arch):
     app_path = os.path.join(tmp_path, '%s-%s.AppImage' % (app_name, arch))
 
     # Freeze the app
-    pyi_builder_spec.test_source('print("OK")', app_name=app_name,
-                                 pyi_args=["--onedir"])
+    pyi_builder_spec.test_source('print("OK")', app_name=app_name, pyi_args=["--onedir"])
 
-    # Prepare the dist folder for AppImage compliancy
+    # Prepare the dist folder for AppImage compliance
     tools_dir = os.path.join(os.path.dirname(__file__), 'data', 'appimage')
     script = os.path.join(tools_dir, 'create.sh')
     subprocess.check_call(['bash', script, tools_dir, tmp_path, app_name])
 
     # Create the AppImage
     app_dir = os.path.join(tmp_path, 'dist', 'AppRun')
-    subprocess.check_call([appimagetool, "--no-appstream", app_dir,
-                           app_path])
+    subprocess.check_call([appimagetool, "--no-appstream", app_dir, app_path])
 
     # Launch the AppImage
     st = os.stat(app_path)

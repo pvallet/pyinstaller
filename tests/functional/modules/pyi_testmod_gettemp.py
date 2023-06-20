@@ -1,5 +1,5 @@
 #-----------------------------------------------------------------------------
-# Copyright (c) 2005-2021, PyInstaller Development Team.
+# Copyright (c) 2005-2023, PyInstaller Development Team.
 #
 # Distributed under the terms of the GNU General Public License (version 2
 # or later) with exception for distributing the bootloader.
@@ -9,12 +9,14 @@
 # SPDX-License-Identifier: (GPL-2.0-or-later WITH Bootloader-exception)
 #-----------------------------------------------------------------------------
 
-import os, sys
+import os
+import sys
+
 
 def gettemp(basename):
     """
-    Get the path to a temp file previously written by the temp runner. Useful to
-    compare results between running in interpreter and running frozen.
+    Get the path to a temp file previously written by the temp runner.
+    Useful to compare results between running in interpreter and running frozen.
     """
     exec_dir = os.path.dirname(sys.executable)
     # onedir mode:

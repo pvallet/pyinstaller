@@ -1,5 +1,5 @@
 #-----------------------------------------------------------------------------
-# Copyright (c) 2005-2021, PyInstaller Development Team.
+# Copyright (c) 2005-2023, PyInstaller Development Team.
 #
 # Distributed under the terms of the GNU General Public License (version 2
 # or later) with exception for distributing the bootloader.
@@ -27,6 +27,4 @@ print('Encoding expected:', encoding)
 print('Encoding current:', frozen_encoding)
 
 if frozen_encoding != encoding:
-    raise SystemExit('Frozen encoding %s is not the same as unfrozen %s.' %
-                     (frozen_encoding, encoding))
-
+    raise SystemExit('Frozen encoding %s is not the same as unfrozen %s.' % (frozen_encoding, encoding))

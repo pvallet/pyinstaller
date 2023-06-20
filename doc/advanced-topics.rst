@@ -1,10 +1,10 @@
 Advanced Topics
 ================
 
-The following discussions cover details of |PyInstaller| internal methods.
+The following discussions cover details of PyInstaller internal methods.
 You should not need this level of detail for normal use,
 but such details are helpful if you want to investigate
-the |PyInstaller| code and possibly contribute to it,
+the PyInstaller code and possibly contribute to it,
 as described in `How to Contribute`_.
 
 
@@ -18,7 +18,7 @@ script can begin execution.
 A summary of these steps was given in the Overview
 (:ref:`How the One-Folder Program Works` and
 :ref:`How the One-File Program Works`).
-Here is more detail to help you understand what the |bootloader|
+Here is more detail to help you understand what the bootloader
 does and how to figure out problems.
 
 
@@ -78,7 +78,7 @@ Running Python code requires several steps:
    It sets up the Python import mechanism to load modules
    only from archives embedded in the executable.
    It also adds the attributes ``frozen``
-   and ``_MEIPASS`` to the ``sys`` built-in module.
+   and ``_MEIPASS`` to the :mod:`sys` built-in module.
 
 2. Execute any run-time hooks: first those specified by the
    user, then any standard ones.
@@ -86,9 +86,9 @@ Running Python code requires several steps:
 3. Install python "egg" files.
    When a module is part of a zip file (.egg),
    it has been bundled into the :file:`./eggs` directory.
-   Installing means appending .egg file names to ``sys.path``.
+   Installing means appending .egg file names to :data:`sys.path`.
    Python automatically detects whether an
-   item in ``sys.path`` is a zip file or a directory.
+   item in :data:`sys.path` is a zip file or a directory.
 
 4. Run the main script.
 
@@ -96,9 +96,9 @@ Running Python code requires several steps:
 Python imports in a bundled app
 -------------------------------------
 
-|PyInstaller| embeds compiled python code
+PyInstaller embeds compiled python code
 (``.pyc`` files) within the executable.
-|PyInstaller| injects its code into the
+PyInstaller injects its code into the
 normal Python import mechanism.
 Python allows this;
 the support is described in :pep:`302`  "New Import Hooks".
@@ -110,10 +110,10 @@ bundled with the app) and for C-extensions.
 The code can be read in :file:`./PyInstaller/loader/pyi_mod03_importers.py`.
 
 At runtime the PyInstaller :pep:`302` hooks are appended
-to the variable ``sys.meta_path``.
+to the variable :data:`sys.meta_path`.
 When trying to import modules the interpreter will
-first try PEP 302 hooks in ``sys.meta_path``
-before searching in ``sys.path``.
+first try PEP 302 hooks in :data:`sys.meta_path`
+before searching in :data:`sys.path`.
 As a result, the Python interpreter
 loads imported python modules from the archive embedded
 in the bundled executable.
@@ -123,7 +123,7 @@ in a bundled app:
 
 1. Is it a built-in module?
    A list of built-in modules is in variable
-   ``sys.builtin_module_names``.
+   :data:`sys.builtin_module_names`.
 
 2. Is it a module embedded in the executable?
    Then load it from embedded archive.
@@ -133,154 +133,293 @@ in a bundled app:
    :file:`{package.subpackage.module}.pyd` or
    :file:`{package.subpackage.module}.so`.
 
-4. Next examine paths in the ``sys.path``.
+4. Next examine paths in the :data:`sys.path`.
    There could be any additional location with python modules
    or ``.egg`` filenames.
 
 5. If the module was not found then
-   raise ``ImportError``.
+   raise :class:`ImportError`.
+
+Splash screen startup
+-------------------------------------
+
+.. Note::
+    This feature is incompatible with macOS. In the current design, the
+    splash screen operates in a secondary thread, which is disallowed by
+    the Tcl/Tk (or rather, the underlying GUI toolkit) on macOS.
+
+
+If a splash screen is bundled with the application the
+bootloaders startup procedure and threading model is a little
+more complex. The following describes the order of operation if
+a splash screen is bundled:
+
+1. The bootloader checks if it runs as the outermost application
+   (Not the child process which was spawned by the bootloader).
+
+2. If splash screen resources are bundled, try to extract them
+   (onefile mode). The extraction path is inside
+   :file:`{temppath}/_MEI{xxxxxx}/__splash{x}`. If in onedir mode,
+   the application assumes the resources are relative to the
+   executable.
+
+3. Load the tcl and tk shared libraries into the bootloader.
+
+    - Windows: ``tcl86t.dll``/``tk86t.dll``
+    - Linux: ``libtcl.so``/``libtk.so``
+
+4. Prepare a minimal environment for the `Tcl/Tk`_ interpreter
+   by replacing/modifying the following functions:
+
+    1. ``::tclInit``: This command is called to find the
+       standard library of tcl. We replace this command to
+       force tcl to load/execute only the bundled modules.
+
+    2. ``::tcl_findLibrary``: Tk uses this function to source
+       all its components. The overwritten function sets the
+       required environment variable and evaluates the requested
+       file.
+
+    3. ``::exit``: This function is modified to ensure a
+       proper exit of the splash screen thread.
+
+    4. ``::source``: This command executes the contents of a
+       passed file. Since we run in a minimal environment we
+       mock the execution of not bundled files and execute
+       those who are.
+
+5. Start the tcl interpreter and execute the splash screen
+   script which was generated by PyInstaller's build target
+   :mod:`Splash` at build time. This script creates the
+   environment variable ``_PYIBoot_SPLASH``, which is also
+   available to the python interpreter. It also initializes a
+   tcp server socket to receive commands from python.
+
+.. Note::
+   The tcl interpreter is started in a separate thread. Only
+   after the tcl interpreter has executed the splash
+   screen script, the bootloader thread, which is responsible
+   for extraction/starting the python interpreter, is
+   resumed.
+
+
+.. _pyi_splash Module:
+
+:mod:`pyi_splash` Module (Detailed)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This module connects to the bootloader to send messages to the splash screen.
+
+It is intended to act as an RPC interface for the functions provided by the
+bootloader, such as displaying text or closing. This makes the users python
+program independent of how the communication with the bootloader is
+implemented, since a consistent API is provided.
+
+To connect to the bootloader, it connects to a local tcp server socket whose port
+is passed through the environment variable ``_PYIBoot_SPLASH``. The bootloader
+connects to the socket via the python module ``_socket``. Although this socket
+is bidirectional, the module is only configured to send data.
+Since the os-module, which is needed to request the environment variable,
+is not available at boot time, the module does not establish the connection
+until initialization.
+
+This module does not support reloads while the splash screen is displayed, i.e.
+it cannot be reloaded (such as by :func:`importlib.reload`), because the splash
+screen closes automatically when the connection to this instance of the
+module is lost.
+
+Functions
+---------
+
+.. py:module:: pyi_splash
+.. py:currentmodule:: pyi_splash
+
+.. Note::
+    Note that if the ``_PYIBoot_SPLASH`` environment variable does not exist or an
+    error occurs during the connection, the module will **not** raise an error, but simply
+    not initialize itself (i.e. :func:`pyi_splash.is_alive` will return ``False``). Before
+    sending commands to the splash screen, one should check if the module was initialized
+    correctly, otherwise a :class:`RuntimeError` will be raised.
+
+.. py:function:: is_alive()
+
+    Indicates whether the module can be used.
+
+    Returns ``False`` if the module is either not initialized or was disabled
+    by closing the splash screen. Otherwise, the module should be usable.
+
+.. py:function:: update_text(msg)
+
+    Updates the text on the splash screen window.
+
+    :param str msg: the text to be displayed
+    :raises ConnectionError: If the OS fails to write to the socket
+    :raises RuntimeError: If the module is not initialized
+
+.. py:function:: close()
+
+    Close the connection to the ipc tcp server socket
+
+    This will close the splash screen and renders this module unusable.
+    After this function is called, no connection can be opened to the splash
+    screen again and all functions if this module become unusable
 
 
 .. _the toc and tree classes:
 
-The TOC and Tree Classes
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+The Table of Contents (TOC) lists and the Tree Class
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-|PyInstaller| manages lists of files using the ``TOC``
-(Table Of Contents) class.
-It provides the ``Tree`` class as a convenient way to build a ``TOC``
-from a folder path.
+PyInstaller manages lists of files that are to be collected in the
+so-called Table of Contents (TOC) list format. These lists contain
+three-element tuples that encapsulate information about a file's
+destination name, the file's full source path, and its type.
 
-TOC Class (Table of Contents)
----------------------------------
-
-Objects of the ``TOC`` class are used as input to the classes created in
-a spec file.
-For example, the ``scripts`` member of an Analysis object is a TOC
-containing a list of scripts.
-The ``pure`` member is a TOC with a list of modules, and so on.
-
-Basically a ``TOC`` object contains a list of tuples of the form
-
-    ``(``\ *name*\ ``,``\ *path*\ ``,``\ *typecode*\ ``)``
-
-In fact, it acts as an ordered set of tuples;
-that is, it contains no duplicates
-(where uniqueness is based on the *name* element of each tuple).
-Within this constraint, a TOC preserves the order of tuples added to it.
-
-A TOC behaves like a list and supports the same methods
-such as appending, indexing, etc.
-A TOC also behaves like a set, and supports taking differences and intersections.
-In all of these operations a list of tuples can be used as one argument.
-For example, the following expressions are equivalent ways to
-add a file to the ``a.datas`` member::
-
-    a.datas.append( [ ('README', 'src/README.txt', 'DATA' ) ] )
-    a.datas += [ ('README', 'src/README.txt', 'DATA' ) ]
-
-Set-difference makes excluding modules quite easy. For example::
-
-    a.binaries - [('badmodule', None, None)]
-
-is an expression that produces a new ``TOC`` that is a copy of
-``a.binaries`` from which any tuple named ``badmodule`` has been removed.
-The right-hand argument to the subtraction operator
-is a list that contains one tuple
-in which *name* is ``badmodule`` and the *path* and *typecode* elements
-are ``None``.
-Because set membership is based on the *name* element of a tuple only,
-it is not necessary to give accurate *path* and *typecode* elements when subtracting.
-
-In order to add files to a TOC, you need to know the *typecode* values
-and their related *path* values.
-A *typecode* is a one-word string.
-|PyInstaller| uses a number of *typecode* values internally,
-but for the normal case you need to know only these:
+As part of utilities for managing the TOC lists, PyInstaller provides
+a ``Tree`` class as a convenient way to build a TOC list from the
+contents of the given directory. This utility class can be used either
+in the :ref:`.spec files <using spec files>` file or from custom hooks.
 
 
-+---------------+--------------------------------------+-----------------------+--------------------------------------+
-| **typecode**  | **description**                      | **name**              | **path**                             |
-+===============+======================================+=======================+======================================+
-| 'DATA'        | Arbitrary files.                     | Run-time name.        | Full path name in build.             |
-+---------------+--------------------------------------+-----------------------+--------------------------------------+
-| 'BINARY'      | A shared library.                    | Run-time name.        | Full path name in build.             |
-+---------------+--------------------------------------+-----------------------+--------------------------------------+
-| 'EXTENSION'   | A binary extension to Python.        | Run-time name.        | Full path name in build.             |
-+---------------+--------------------------------------+-----------------------+--------------------------------------+
-| 'OPTION'      | A Python run-time option.            | Option code           | ignored.                             |
-+---------------+--------------------------------------+-----------------------+--------------------------------------+
+Table of Contents (TOC) lists
+-----------------------------
 
-The run-time name of a file will be used in the final bundle.
+The ``Analysis`` object produces several TOC lists that provide information
+about files to be collected. The files are grouped into distinct lists
+based on their type or function, for example:
+- ``Analysis.scripts``: program script(s)
+- ``Analysis.pure``: pure-python modules
+- ``Analysis.binaries``: binary extension modules and shared libraries
+- ``Analysis.datas``: data files
+
+The generated TOC lists are passed to various build targets within the
+:ref:`spec file <using spec files>`, such as ``PYZ``, ``EXE``, and
+``COLLECT``.
+
+Each TOC list contains three-element tuples,
+
+    ``(dest_name, src_name , typecode)``
+
+where ``dest_name`` is the destination file name (i.e., file name within
+the frozen application; as such, it must always be a relative name),
+``src_name`` is the source file name (the path from where the file is
+collected), and ``typecode`` is a string that denotes the type of the
+file (or entry).
+
+Internally, PyInstaller uses a number of *typecode* values, but for the
+normal case you need to know only these:
+
++---------------+---------------------------------------+----------------------------------+---------------------------------------------+
+| **typecode**  | **description**                       | **dest_name**                    | **src_name**                                |
++===============+=======================================+==================================+=============================================+
+| 'DATA'        | Arbitrary (data) files.               | Name in the frozen application.  | Full path to the file on the build system.  |
++---------------+---------------------------------------+----------------------------------+---------------------------------------------+
+| 'BINARY'      | A shared library.                     | Name in the frozen application.  | Full path to the file on the build system.  |
++---------------+---------------------------------------+----------------------------------+---------------------------------------------+
+| 'EXTENSION'   | A Python binary extension.            | Name in the frozen application.  | Full path to the file on the build system.  |
++---------------+---------------------------------------+----------------------------------+---------------------------------------------+
+| 'OPTION'      | A PyInstaller/Python run-time option. | Option name (and optional value, | Ignored.                                    |
+|               |                                       | separated by a whitespace).      |                                             |
++---------------+---------------------------------------+----------------------------------+---------------------------------------------+
+
+The destination name corresponds to the name of the final in the
+frozen application, relative to the top-level application directory.
 It may include path elements, for example :file:`extras/mydata.txt`.
 
-A ``BINARY`` file or an ``EXTENSION`` file is assumed to be loadable, executable code,
-for example a dynamic library.
-The types are treated the same.
-``EXTENSION`` is generally used for a Python extension module,
-for example a module compiled by Cython_.
-|PyInstaller| will examine either type of file for dependencies,
-and if any are found, they are also included.
+Entries of type ``BINARY`` and ``EXTENSION`` are assumed to represent a
+file containing loadable executable code, such as a dynamic library.
+Generally, ``EXTENSION`` is used to denote Python extensions modules,
+such as modules compiled by Cython_. The two file types are treated in
+the same way; PyInstaller scans them for additional link-time
+dependencies and collects any dependencies that are discovered. On some
+operating systems, binaries and extensions undergo additional processing
+(such as path rewriting for link-time dependencies and code-signing
+on macOS).
+
+The TOC lists produced by ``Analysis`` can be modified in the
+:ref:`spec file <using spec files>` file before they are passed on to
+the build targets to either include additional entries (although it is
+preferable to pass extra files to be included via `binaries` or `datas`
+arguments of `Analysis`) or remove unwanted entries.
+
+.. versionchanged:: 5.11
+
+   In PyInstaller versions prior to 5.11, the TOC lists were in fact
+   instances of the :class:`TOC` class, which internally performed
+   implicit entry de-duplication; i.e., trying to insert an entry with
+   existing target name would result in no changes to the list.
+
+   However, due to the shortcomings of the ``TOC`` class that resulted from
+   loosely-defined and conflicting semantics, the use of the ``TOC`` class
+   has been deprecated. The TOC lists are now instances of plain ``list``,
+   and PyInstaller performs explicit list normalization (entry de-duplication).
+   The explicit normalization is performed at the end of ``Analysis``
+   instantiation, when the lists are stored in the class' properties (such
+   as ``Analysis.datas`` and ``Analysis.binaries``). Similarly, explicit
+   list normalization is also performed once the build targets (``EXE``,
+   ``PYZ``, ``PKG``, ``COLLECT``, ``BUNDLE``) consolidate the input TOC
+   lists into the final list.
+
 
 The Tree Class
-------------------
+--------------
 
-The Tree class is a way of creating a TOC that describes some or all of the
-files within a directory:
+The ``Tree`` class offers a convenient way of creating a TOC list that
+describes contents of the given directory:
 
       ``Tree(``\ *root*\ ``, prefix=``\ *run-time-folder*\ ``, excludes=``\ *string_list*\ ``, typecode=``\ *code* | ``'DATA' )``
 
-* The *root* argument is a path string to a directory.
+* The *root* argument is a string denoting the path to the directory.
   It may be absolute or relative to the spec file directory.
 
-* The *prefix* argument, if given, is a name for a subfolder
-  within the run-time folder to contain the tree files.
-  If you omit *prefix* or give ``None``,
-  the tree files will be at
-  the top level of the run-time folder.
+* The optional *prefix* argument is a name for a sub-directory
+  in the application directory into which files are to be collected.
+  If not specified or set to ``None``, the files will be collected
+  into the top-level application directory.
 
-* The *excludes* argument, if given, is a list of one or more
+* The optional *excludes* argument is a list of one or more
   strings that match files in the *root* that should be omitted from the Tree.
   An item in the list can be either:
 
   - a name, which causes files or folders with this basename to be excluded
 
-  - ``*.ext``, which causes files with this extension to be excluded
+  - a glob pattern (e.g., ``*.ext``), which causes matching files to be excluded
 
-* The *typecode* argument, if given, specifies the TOC typecode string
-  that applies to all items in the Tree.
-  If omitted, the default is ``DATA``, which is appropriate for most cases.
+* The optional *typecode* argument specifies the TOC typecode string
+  that is assigned to all entries in the TOC list.
+  The default value is ``DATA``, which is appropriate for most cases.
 
 For example::
 
-    extras_toc = Tree('../src/extras', prefix='extras', excludes=['tmp','*.pyc'])
+    extras_toc = Tree('../src/extras', prefix='extras', excludes=['tmp', '*.pyc'])
 
-This creates ``extras_toc`` as a TOC object that lists
+This creates ``extras_toc`` as a TOC list that contains entries for
 all files from the relative path :file:`../src/extras`,
 omitting those that have the basename (or are in a folder named) ``tmp``
-or that have the type ``.pyc``.
+or have the ``.pyc`` extension.
 Each tuple in this TOC has:
 
-* A *name* composed of :file:`extras/{filename}`.
+* A *dest_name* in form of:file:`extras/{filename}`.
 
-* A *path* consisting of a complete, absolute path to that file in the
+* A *src_name* that corresponds to the full absolute path to that file in the
   :file:`../src/extras` folder (relative to the location of the spec file).
 
-* A *typecode* of ``DATA`` (by default).
+* A *typecode* of ``DATA`` (the default).
 
 An example of creating a TOC listing some binary modules::
 
-    cython_mods = Tree( '..src/cy_mods', excludes=['*.pyx','*.py','*.pyc'], typecode='EXTENSION' )
+    cython_mods = Tree('..src/cy_mods', excludes=['*.pyx', '*.py', '*.pyc'], typecode='EXTENSION')
 
-This creates a TOC with a tuple for every file in the :file:`cy_mods` folder,
-excluding any with the ``.pyx``, ``.py`` or ``.pyc`` suffixes
-(so presumably collecting the ``.pyd`` or ``.so`` modules created by Cython).
+This creates a TOC list with entries for each file in the :file:`cy_mods` directory,
+excluding files with the ``.pyx``, ``.py``, or ``.pyc`` extension
+(so presumably collecting only the ``.pyd`` or ``.so`` modules created by Cython).
 Each tuple in this TOC has:
 
-* Its own filename as *name* (no prefix; the file will be at the top level of the bundle).
+* A *dest_name* that corresponds to the file's basename (all files are collected
+  in top-level application directory).
 
-* A *path* as an absolute path to that file in :file:`../src/cy_mods`
-  relative to the spec file.
+* A *src_name* that corresponds to the full absolute path to that file in
+  :file:`../src/cy_mods` relative to the spec file.
 
 * A *typecode* of ``EXTENSION`` (``BINARY`` could be used as well).
 
@@ -292,7 +431,7 @@ Inspecting Archives
 
 An archive is a file that contains other files,
 for example a ``.tar`` file, a ``.jar`` file, or a ``.zip`` file.
-Two kinds of archives are used in |PyInstaller|.
+Two kinds of archives are used in PyInstaller.
 One is a ZlibArchive, which
 allows Python modules to be stored efficiently and,
 with some import hooks, imported directly.
@@ -319,7 +458,7 @@ All parts of a ZlibArchive are stored in the
 
 A ZlibArchive is used at run-time to import bundled python modules.
 Even with maximum compression this works  faster than the normal import.
-Instead of searching ``sys.path``, there's a lookup in the dictionary.
+Instead of searching :data:`sys.path`, there's a lookup in the dictionary.
 There are no directory operations and no
 file to open (the file is already open).
 There's just a seek, a read and a decompress.
@@ -389,7 +528,7 @@ Use the ``pyi-archive_viewer`` command to inspect any type of archive:
       ``pyi-archive_viewer`` *archivefile*
 
 With this command you can examine the contents of any archive built with
-|PyInstaller| (a ``PYZ`` or ``PKG``), or any executable (``.exe`` file
+PyInstaller (a ``PYZ`` or ``PKG``), or any executable (``.exe`` file
 or an ELF or COFF binary).
 The archive can be navigated using these commands:
 
@@ -439,7 +578,7 @@ and writes to stdout all its binary dependencies.
 This is handy to find out which DLLs are required by
 an executable or by another DLL.
 
-``pyi-bindepend`` is used by |PyInstaller| to
+``pyi-bindepend`` is used by PyInstaller to
 follow the chain of dependencies of binary extensions
 during Analysis.
 
@@ -455,19 +594,19 @@ the two bundles should be exactly, bit-for-bit identical.
 
 That is not the case normally.
 Python uses a random hash to make dicts and other hashed types,
-and this affects compiled byte-code as well as |PyInstaller|
+and this affects compiled byte-code as well as PyInstaller
 internal data structures.
 As a result, two builds may not produce bit-for-bit identical results
 even when all the components of the application bundle are the same
 and the two applications execute in identical ways.
 
-You can assure that a build will produce the same bits
-by setting the ``PYTHONHASHSEED`` environment variable to a known
-integer value before running |PyInstaller|.
+You can ensure that a build will produce the same bits
+by setting the :envvar:`PYTHONHASHSEED` environment variable to a known
+integer value before running PyInstaller.
 This forces Python to use the same random hash sequence until
-``PYTHONHASHSEED`` is unset or set to ``'random'``.
-For example, execute |PyInstaller| in a script such as
-the following (for GNU/Linux and OS X)::
+:envvar:`PYTHONHASHSEED` is unset or set to ``'random'``.
+For example, execute PyInstaller in a script such as
+the following (for GNU/Linux and macOS)::
 
     # set seed to a known repeatable integer value
     PYTHONHASHSEED=1
@@ -478,6 +617,13 @@ the following (for GNU/Linux and OS X)::
     cksum dist/myscript/myscript | awk '{print $1}' > dist/myscript/checksum.txt
     # let Python be unpredictable again
     unset PYTHONHASHSEED
+
+.. versionchanged:: 4.8
+   The build timestamp in the PE headers of the generated Windows
+   executables is set to the current time during the assembly process.
+   A custom timestamp value can be specified via the ``SOURCE_DATE_EPOCH``
+   environment variable to achieve `reproducible builds
+   <https://reproducible-builds.org/docs/source-date-epoch>`_.
 
 
 .. include:: _common_definitions.txt

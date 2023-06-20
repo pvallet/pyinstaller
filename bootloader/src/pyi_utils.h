@@ -1,6 +1,6 @@
 /*
  * ****************************************************************************
- * Copyright (c) 2013-2021, PyInstaller Development Team.
+ * Copyright (c) 2013-2023, PyInstaller Development Team.
  *
  * Distributed under the terms of the GNU General Public License (version 2
  * or later) with exception for distributing the bootloader.
@@ -20,6 +20,10 @@
 #define HEADER_PYI_UTILS_H
 
 #include "pyi_archive.h"
+
+#ifndef _WIN32
+#include <sys/types.h> /* pid_t */
+#endif
 
 // some platforms do not provide strnlen
 #ifndef HAVE_STRNLEN
@@ -48,8 +52,27 @@ int pyi_copy_file(const char *src, const char *dst, const char *filename);
 
 /* Other routines. */
 dylib_t pyi_utils_dlopen(const char *dllpath);
+int pyi_utils_dlclose(dylib_t dll);
 int pyi_utils_create_child(const char *thisfile, const ARCHIVE_STATUS *status,
                            const int argc, char *const argv[]);
+#ifndef _WIN32
+pid_t pyi_utils_get_child_pid();
+void pyi_utils_reraise_child_signal();
+#endif
 int pyi_utils_set_environment(const ARCHIVE_STATUS *status);
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+int pyi_utils_replace_process(const char *thisfile, const int argc, char *const argv[]);
+#endif
+
+/* Argument handling */
+int pyi_utils_initialize_args(const int argc, char *const argv[]);
+int pyi_utils_append_to_args(const char *arg);
+void pyi_utils_get_args(int *argc, char ***argv);
+void pyi_utils_free_args();
+
+/* Magic pattern matching */
+extern const unsigned char MAGIC_BASE[8];
+uint64_t pyi_utils_find_magic_pattern(FILE *fp, const unsigned char *magic, size_t magic_len);
 
 #endif  /* HEADER_PY_UTILS_H */

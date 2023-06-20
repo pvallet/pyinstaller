@@ -5,6 +5,254 @@ Thanks goes to all the kind PyInstaller contributors who have contributed
 new code, bug reports, fixes, comments and ideas. A brief list follows,
 please let us know if your name is omitted by accident:
 
+Contributions to PyInstaller 5.12.0
+-----------------------------------
+
+* Rok Mandeljc
+* Brénainn Woodsend
+* Joshua Bronson
+* caption
+
+Contributions to PyInstaller 5.11.0
+-----------------------------------
+
+* Rok Mandeljc
+* cat (also known as *0xb8*)
+* eduardomotta-emottasistemas
+
+Contributions to PyInstaller 5.10.1
+-----------------------------------
+
+* Rok Mandeljc
+* Christian Clauss
+
+Contributions to PyInstaller 5.10.0
+-----------------------------------
+
+* Rok Mandeljc
+* Michael Shigorin
+* V. Armando Solé
+
+Contributions to PyInstaller 5.9.0
+----------------------------------
+
+* Brénainn Woodsend
+* Hugo van Kemenade
+* Rok Mandeljc
+* Ievgen Popovych
+
+Contributions to PyInstaller 5.8.0
+----------------------------------
+
+* Rok Mandeljc
+* Brénainn Woodsend
+* Arjan Molenaar
+* Breeze
+* Ievgen Popovych
+* João Vitor
+* bersbersbers
+
+Contributions to PyInstaller 5.7.0
+----------------------------------
+
+* Rok Mandeljc
+* Brénainn Woodsend
+* Dan Yeaw
+* Rumbelows
+* Shoshana Berleant
+
+Contributions to PyInstaller 5.6.2
+----------------------------------
+
+* Rok Mandeljc
+* bersbersbers
+
+Contributions to PyInstaller 5.6.1
+----------------------------------
+
+* Timmy Welch
+* Rok Mandeljc
+* Brénainn Woodsend
+
+Contributions to PyInstaller 5.6
+--------------------------------
+
+* Rok Mandeljc
+* Brénainn Woodsend
+* Padsala Tushal
+
+Contributions to PyInstaller 5.5
+--------------------------------
+
+* Rok Mandeljc
+* Jasper Harrison
+* Alex
+* Andreas Schwab
+* jsagarribay
+
+Contributions to PyInstaller 5.4.1
+----------------------------------
+
+* Rok Mandeljc
+
+Contributions to PyInstaller 5.4
+--------------------------------
+
+* Rok Mandeljc
+* Brénainn Woodsend
+* Efrem Braun
+* Samuel T
+
+Contributions to PyInstaller 5.3
+--------------------------------
+
+* Rok Mandeljc
+* Dan Yeaw
+* Tim Gates
+
+Contributions to PyInstaller 5.2
+--------------------------------
+
+* Rok Mandeljc
+* Brénainn Woodsend
+* Florian Bruhin
+* Zev Lee
+* Highfire1
+* Jasper Harrison
+* KnockKnockWho
+* Temerold
+* relativisticelectron
+
+
+Contributions to PyInstaller 5.1
+--------------------------------
+
+* Rok Mandeljc
+* Brénainn Woodsend
+* Jasper Harrison
+* byehack
+* ARNTechnology
+* James Gerity
+* Kian-Meng Ang
+
+
+Contributions to PyInstaller 5.0.1
+----------------------------------
+
+* Rok Mandeljc
+* Abdelhakim Qbaich
+* Brénainn Woodsend
+* Jasper Harrison
+
+
+Contributions to PyInstaller 5.0
+---------------------------------
+
+* Rok Mandeljc
+* Brénainn Woodsend
+* Jasper Harrison
+* Starbuck5
+* Chris Hillery
+* Dan Yeaw
+* eric15342335
+* 谭九鼎
+* AdrianIssott
+* Andreas Schwab
+* Andrii Oriekhov
+* Anssi Alahuhta
+* Brian Teague
+* Charlie Hayden
+* Emil Berg
+* Eric Missimer
+* GoldinGuy
+* James Gerity
+* Melvin Wang
+* Sapphire Becker
+* dennisvang
+* gentlegiantJGC
+* johnthagen
+* luc-x41
+* wangling12
+
+
+Contributions to PyInstaller 4.10
+---------------------------------
+
+* Rok Mandeljc
+* Brénainn Woodsend
+* Andreas Schwab
+* GoldinGuy
+* Sapphire Becker
+* dennisvang
+
+
+Contributions to PyInstaller 4.9
+--------------------------------
+
+* Rok Mandeljc - Core Developer
+* Brénainn Woodsend - Core Developer
+* Jasper Harrison - Core Develop, Maintainer, Release Manager
+* gentlegiantJGC
+
+
+Contributions to PyInstaller 4.8
+--------------------------------
+
+* Rok Mandeljc - Core Developer
+* Jasper Harrison - Core Develop, Maintainer, Release Manager
+* Brénainn Woodsend - Core Developer
+
+*	Ankith, Safihre, luc-x41
+
+
+Contributions to PyInstaller 4.7
+--------------------------------
+
+* Rok Mandeljc - Core Developer
+* Brénainn Woodsend - Core Developer
+* Jasper Harrison - Core Develop, Maintainer, Release Manager
+
+
+Contributions to PyInstaller 4.6
+--------------------------------
+
+* Rok Mandeljc - Core Developer
+* Brénainn Woodsend - Core Developer
+* Jasper Harrison - Maintainer, Release Manager
+
+* Anssi Alahutta, Dan Yeaw, Eric Missimer, Chris Hillery, Melvin Wang, wangling12, eric15342335
+
+
+Contributions to PyInstaller 4.5.1
+----------------------------------
+
+* Jasper Harrison - Maintainer, Release Manager
+* ankith26
+
+Contributions to PyInstaller 4.5
+--------------------------------
+
+* Rok Mandeljc - Core Developer
+* Brénainn Woodsend - Core Developer
+* Jasper Harrison - Maintainer, Release Manager
+* Dave Dykstra
+* Andy Hobbs
+* Nicholas Ollinger
+
+
+Contributions to PyInstaller 4.4
+--------------------------------
+
+* Rok Mandeljc - Core Developer
+* Brénainn Woodsend - Core Developer
+* Jasper Harrison - Core Developer, Maintainer, Release Manager
+* Hartmut Goebel - Core Developer
+* xoviat
+* Chrisg2000
+
+* Alex Gembe, James Duley, Jeffrey, Kenny Huynh, Maxim Mazurok, mozbugbox
+
+
 Contributions to PyInstaller 4.3
 --------------------------------
 
@@ -232,7 +480,7 @@ Contributions to PyInstaller 3.2
 
 - And Cycle - unicode fixes.
 - Chris Hager - QtQuick hook.
-- David Schoorisse - wrong icon paramter in Windows example.
+- David Schoorisse - wrong icon parameter in Windows example.
 - Florian Bruhin - typo hunting.
 - Garth Bushell - Support for objcopy.
 - Insoleet - lib2to3 hook
@@ -339,7 +587,7 @@ Contributions to PyInstaller 3.0
 - Noah Treuhaft - OpenCV import hook.
 - Michael Hipp - reportlab import hook.
 - Michael Sverdlik - certifi, httplib2, requests, jsonschema import hooks.
-- Santiago Reig - appy import hook.
+- Santiago Reig - apply import hook.
 
 
 Contributions to PyInstaller 2.1 and older

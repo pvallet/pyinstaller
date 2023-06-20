@@ -1,5 +1,5 @@
 #-----------------------------------------------------------------------------
-# Copyright (c) 2005-2021, PyInstaller Development Team.
+# Copyright (c) 2005-2023, PyInstaller Development Team.
 #
 # Distributed under the terms of the GNU General Public License (version 2
 # or later) with exception for distributing the bootloader.
@@ -9,12 +9,12 @@
 # SPDX-License-Identifier: (GPL-2.0-or-later WITH Bootloader-exception)
 #-----------------------------------------------------------------------------
 
-
 import types
 import pytest
 import itertools
+from textwrap import dedent
 
-from PyInstaller import HOMEPATH
+from PyInstaller import HOMEPATH, compat
 from PyInstaller.depend import analysis
 from PyInstaller.lib.modulegraph import modulegraph
 import PyInstaller.log as logging
@@ -28,24 +28,53 @@ def test_get_co_using_ctypes(tmpdir):
     script.write('import ctypes')
     script_filename = str(script)
     mg.add_script(script_filename)
-    res = mg.get_co_using_ctypes()
+    res = mg.get_code_using("ctypes")
     # Script's code object must be in the results
     assert script_filename in res
     assert isinstance(res[script_filename], types.CodeType), res
 
 
 def test_get_co_using_ctypes_from_extension():
-    # If an extension module has an hidden import to ctypes (e.g. added by the
-    # hook), the extension module must not show up in the result of
-    # `get_co_using_ctypes()`, since it has no code-object to be analyzed.
+    # If an extension module has an hidden import to ctypes (e.g. added by the hook), the extension module must not
+    # show up in the result of `get_co_using_ctypes()`, since it has no code-object to be analyzed.
     # See issue #2492 and test_regression::issue_2492.
     logging.logger.setLevel(logging.DEBUG)
     mg = analysis.PyiModuleGraph(HOMEPATH, excludes=["xencodings"])
     struct = mg.createNode(modulegraph.Extension, '_struct', 'struct.so')
-    mg.implyNodeReference(struct, 'ctypes') # simulate the hidden import
-    res = mg.get_co_using_ctypes()
+    mg.implyNodeReference(struct, 'ctypes')  # simulate the hidden import
+    res = mg.get_code_using("ctypes")
     # _struct must not be in the results
     assert '_struct' not in res
+
+
+def test_metadata_collection(tmpdir):
+    from PyInstaller.utils.hooks import copy_metadata
+
+    mg = analysis.PyiModuleGraph(HOMEPATH, excludes=["xencodings"])
+    script = tmpdir.join('script.py')
+
+    if compat.is_py38:
+        importlib_metadata = "importlib.metadata"
+    else:
+        importlib_metadata = "importlib_metadata"
+
+    script.write(
+        dedent(
+            f'''
+            from {importlib_metadata} import distribution, version
+            import {importlib_metadata}
+
+            distribution("setuptools")
+            {importlib_metadata}.version("altgraph")
+            '''
+        )
+    )
+
+    mg.add_script(str(script))
+    metadata = mg.metadata_required()
+
+    assert copy_metadata("setuptools")[0] in metadata
+    assert copy_metadata("altgraph")[0] in metadata
 
 
 class FakePyiModuleGraph(analysis.PyiModuleGraph):
@@ -59,7 +88,6 @@ def fresh_pyi_modgraph(monkeypatch):
     """
     Get a fresh PyiModuleGraph
     """
-
     def fake_base_modules(self):
         # speed up set up
         self._base_modules = ()
@@ -68,8 +96,7 @@ def fresh_pyi_modgraph(monkeypatch):
     # ensure we get a fresh PyiModuleGraph
     monkeypatch.setattr(analysis, "_cached_module_graph_", None)
     # speed up setup
-    monkeypatch.setattr(analysis.PyiModuleGraph,
-                        "_analyze_base_modules", fake_base_modules)
+    monkeypatch.setattr(analysis.PyiModuleGraph, "_analyze_base_modules", fake_base_modules)
     return analysis.initialize_modgraph()
 
 
@@ -90,7 +117,7 @@ def test_cached_graph_is_not_leaking(fresh_pyi_modgraph, monkeypatch, tmpdir):
     names = [n.identifier for n in mg.iter_graph(start=node)]
     assert "uuid" in names
 
-    # the acutal test: uuid is not leaking to the other script
+    # the actual test: uuid is not leaking to the other script
     src = gen_sourcefile(tmpdir, """print""", test_id="3")
     node = mg.add_script(str(src))
     assert node is not None
@@ -113,7 +140,7 @@ def test_cached_graph_is_not_leaking_hidden_imports(fresh_pyi_modgraph, tmpdir):
     names = [n.identifier for n in mg.iter_graph(start=node)]
     assert "uuid" in names
 
-    # the acutal test: uuid is not leaking to the other script
+    # the actual test: uuid is not leaking to the other script
     src = gen_sourcefile(tmpdir, """print""", test_id="3")
     node = mg.add_script(str(src))
     assert node is not None
@@ -134,7 +161,7 @@ def test_graph_collects_script_dependencies(fresh_pyi_modgraph, tmpdir):
     mg.add_script(str(src2))
     assert mg.find_node("uuid")  # self-test
 
-    # The acutal test: uuid is (indirectly) linked to the first script
+    # The actual test: uuid is (indirectly) linked to the first script
     names = [n.identifier for n in mg.iter_graph(start=node)]
     assert str(src2) in names
     assert "uuid" in names
@@ -181,3 +208,35 @@ def test_collect_rthooks_fail_1(tmpdir, monkeypatch):
     hd1 = _gen_pseudo_rthooks("h1", rh1, tmpdir, False)
     with pytest.raises(AssertionError):
         FakePyiModuleGraph(HOMEPATH, user_hook_dirs=[str(hd1)])
+
+
+class FakeGraph(analysis.PyiModuleGraph):
+    """
+    A simplified module graph containing a single node module *foo* with user-defined content.
+    """
+    def __init__(self, source):
+        self.code = compile(source, "<>", "exec")
+
+    def get_code_using(self, package):
+        return {"foo": self.code}
+
+
+def test_metadata_searching():
+    """
+    Test the top level for bytecode scanning for metadata requirements.
+    """
+    from PyInstaller.utils.hooks import copy_metadata
+
+    # This test analyses code which implies that PyInstaller's own metadata (and possibly that of its dependencies) is
+    # required.
+    pyinstaller = set(copy_metadata("pyinstaller"))
+    with_dependencies = set(copy_metadata("pyinstaller", recursive=True))
+
+    self = FakeGraph("from importlib.metadata import distribution; distribution('pyinstaller')")
+    assert pyinstaller == self.metadata_required()
+
+    self = FakeGraph("import pkg_resources; pkg_resources.get_distribution('pyinstaller')")
+    assert pyinstaller == self.metadata_required()
+
+    self = FakeGraph("import pkg_resources; pkg_resources.require('pyinstaller')")
+    assert with_dependencies == self.metadata_required()

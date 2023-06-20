@@ -1,6 +1,6 @@
 /*
  * ****************************************************************************
- * Copyright (c) 2013-2021, PyInstaller Development Team.
+ * Copyright (c) 2013-2023, PyInstaller Development Team.
  *
  * Distributed under the terms of the GNU General Public License (version 2
  * or later) with exception for distributing the bootloader.
@@ -28,32 +28,6 @@
 #include <wchar.h>
 
 /*
- * These macros used to define variables to hold dynamically accessed entry
- * points. These are declared 'extern' in this header, and defined fully later.
- */
-#ifdef _WIN32
-
-    #define EXTDECLPROC(result, name, args) \
-    typedef result (__cdecl *__PROC__ ## name) args; \
-    extern __PROC__ ## name PI_ ## name;
-
-    #define EXTDECLVAR(vartyp, name) \
-    typedef vartyp __VAR__ ## name; \
-    extern __VAR__ ## name *PI_ ## name;
-
-#else
-
-    #define EXTDECLPROC(result, name, args) \
-    typedef result (*__PROC__ ## name) args; \
-    extern __PROC__ ## name PI_ ## name;
-
-    #define EXTDECLVAR(vartyp, name) \
-    typedef vartyp __VAR__ ## name; \
-    extern __VAR__ ## name *PI_ ## name;
-
-#endif  /* WIN32 */
-
-/*
  * Python.h replacements.
  *
  * We do not want to include Python.h because we do no want to bind
@@ -73,10 +47,12 @@
  */
 
 /* Forward declarations of opaque Python types. */
-struct _object;
-typedef struct _object PyObject;
+struct _PyObject;
+typedef struct _PyObject PyObject;
 struct _PyThreadState;
 typedef struct _PyThreadState PyThreadState;
+struct _PyCompilerFlags;
+typedef struct _PyCompilerFlags PyCompilerFlags;
 
 /* The actual declarations of var & function entry points used. */
 
@@ -90,6 +66,7 @@ EXTDECLVAR(int, Py_IgnoreEnvironmentFlag);
 EXTDECLVAR(int, Py_DontWriteBytecodeFlag);
 EXTDECLVAR(int, Py_NoUserSiteDirectory);
 EXTDECLVAR(int, Py_UnbufferedStdioFlag);
+EXTDECLVAR(int, Py_UTF8Mode);
 
 /* This initializes the table of loaded modules (sys.modules), and creates the fundamental modules builtins, __main__ and sys. It also initializes the module search path (sys.path). It does not set sys.argv; */
 EXTDECLPROC(int, Py_Initialize, (void));
@@ -109,7 +86,7 @@ EXTDECLPROC(wchar_t *, Py_GetPath, (void));  /* new in Python 3 */
 
 EXTDECLPROC(void, PySys_SetPath, (wchar_t *));
 EXTDECLPROC(int, PySys_SetArgvEx, (int, wchar_t **, int));
-EXTDECLPROC(int, PyRun_SimpleString, (char *));  /* Py3: UTF-8 encoded string */
+EXTDECLPROC(int, PyRun_SimpleStringFlags, (const char *, PyCompilerFlags *));  /* Py3: UTF-8 encoded string */
 
 /* In Python 3 for these the first argument has to be a UTF-8 encoded string: */
 EXTDECLPROC(PyObject *, PyImport_ExecCodeModule, (char *, PyObject *));
@@ -157,91 +134,12 @@ EXTDECLPROC(PyObject *, PyMarshal_ReadObjectFromString, (const char *, size_t));
 /* Used to get traceback information while launching run scripts */
 EXTDECLPROC(void, PyErr_Fetch, (PyObject **, PyObject **, PyObject **));
 EXTDECLPROC(void, PyErr_Restore, (PyObject *, PyObject *, PyObject *));
+EXTDECLPROC(void, PyErr_NormalizeException, (PyObject **, PyObject **, PyObject **));
 EXTDECLPROC(PyObject *, PyObject_Str, (PyObject *));
 EXTDECLPROC(PyObject *, PyObject_GetAttrString, (PyObject *, const char *));
 EXTDECLPROC(const char *, PyUnicode_AsUTF8, (PyObject *));
-
-/*
- * Macros for reference counting through exported functions
- * (that is: without binding to the binary structure of a PyObject.
- * These rely on the Py_IncRef/Py_DecRef API functions on Pyhton 2.4+.
- *
- * Python versions before 2.4 do not export IncRef/DecRef as a binary API,
- * but only as macros in header files. Since we support Python 2.4+ we do not
- * need to provide an emulated incref/decref as it was with older Python
- * versions.
- *
- * We do not want to depend on Python.h for many reasons (including the fact
- * that we would like to have a single binary for all Python versions).
- */
-
-#define Py_XINCREF(o)    PI_Py_IncRef(o)
-#define Py_XDECREF(o)    PI_Py_DecRef(o)
-#define Py_DECREF(o)     Py_XDECREF(o)
-#define Py_INCREF(o)     Py_XINCREF(o)
-
-/* Macros to declare and get Python entry points in the C file.
- * Typedefs '__PROC__...' have been done above
- *
- * GETPROC_RENAMED is to support Python APIs that are simply renamed. We use
- * the new name, and when loading an old Python lib, load the old symbol into the
- * new name.
- */
-#ifdef _WIN32
-
-    #define DECLPROC(name) \
-    __PROC__ ## name PI_ ## name = NULL;
-    #define GETPROCOPT(dll, name, sym) \
-    PI_ ## name = (__PROC__ ## name)GetProcAddress (dll, #sym)
-    #define GETPROC(dll, name) \
-    GETPROCOPT(dll, name, name); \
-    if (!PI_ ## name) { \
-        FATAL_WINERROR("GetProcAddress", "Failed to get address for " #name "\n");\
-        return -1; \
-    }
-    #define GETPROC_RENAMED(dll, name, sym) \
-    GETPROCOPT(dll, name, sym); \
-    if (!PI_ ## name) { \
-        FATAL_WINERROR("GetProcAddress", "Failed to get address for " #sym "\n");\
-        return -1; \
-    }
-    #define DECLVAR(name) \
-    __VAR__ ## name * PI_ ## name = NULL;
-    #define GETVAR(dll, name) \
-    PI_ ## name = (__VAR__ ## name *)GetProcAddress (dll, #name); \
-    if (!PI_ ## name) { \
-        FATAL_WINERROR("GetProcAddress", "Failed to get address for " #name "\n");\
-        return -1; \
-    }
-
-#else /* ifdef _WIN32 */
-
-    #define DECLPROC(name) \
-    __PROC__ ## name PI_ ## name = NULL;
-    #define GETPROCOPT(dll, name, sym) \
-    PI_ ## name = (__PROC__ ## name)dlsym (dll, #sym)
-    #define GETPROC(dll, name) \
-    GETPROCOPT(dll, name, name); \
-    if (!PI_ ## name) { \
-        FATALERROR ("Cannot dlsym for " #name "\n"); \
-        return -1; \
-    }
-    #define GETPROC_RENAMED(dll, name, sym) \
-    GETPROCOPT(dll, name, sym); \
-    if (!PI_ ## name) { \
-        FATALERROR ("Cannot dlsym for " #sym "\n"); \
-        return -1; \
-    }
-    #define DECLVAR(name) \
-    __VAR__ ## name * PI_ ## name = NULL;
-    #define GETVAR(dll, name) \
-    PI_ ## name = (__VAR__ ## name *)dlsym(dll, #name); \
-    if (!PI_ ## name) { \
-        FATALERROR ("Cannot dlsym for " #name "\n"); \
-        return -1; \
-    }
-
-#endif  /* WIN32 */
+EXTDECLPROC(PyObject *, PyUnicode_Join, (PyObject *, PyObject *));
+EXTDECLPROC(PyObject *, PyUnicode_Replace, (PyObject *, PyObject *, PyObject *, size_t));  /* Py_ssize_t */
 
 int pyi_python_map_names(HMODULE dll, int pyvers);
 

@@ -1,6 +1,6 @@
 /*
  * ****************************************************************************
- * Copyright (c) 2013-2021, PyInstaller Development Team.
+ * Copyright (c) 2013-2023, PyInstaller Development Team.
  *
  * Distributed under the terms of the GNU General Public License (version 2
  * or later) with exception for distributing the bootloader.
@@ -12,38 +12,14 @@
  */
 
 /*
- * Fuctions related to PyInstaller archive embedded in executable.
+ * Functions related to PyInstaller archive embedded in executable.
  */
 
-#ifdef _WIN32
-    #if BYTE_ORDER == LITTLE_ENDIAN
-        #if defined(_MSC_VER)
-            #include <stdlib.h>
-            #define pyi_be32toh(x) _byteswap_ulong(x)
-        #elif defined(__GNUC__) || defined(__clang__)
-            #define pyi_be32toh(x) __builtin_bswap32(x)
-        #else
-            #error Unsupported compiler
-        #endif
-    #elif BYTE_ORDER == BIG_ENDIAN
-        #define pyi_be32toh(x) (x)
-    #else
-        #error Unsupported byte order
-    #endif
-#else
-    #ifdef __FreeBSD__
-/* freebsd issue #188316 */
-        #include <arpa/inet.h>  /* ntohl */
-    #else
-        #include <netinet/in.h>  /* ntohl */
-    #endif
-    #define pyi_be32toh(x) ntohl(x)
-    #include <stdlib.h>   /* malloc */
-    #include <string.h>   /* strncmp, strcpy, strcat */
-    #include <sys/stat.h> /* fchmod */
-#endif /* ifdef _WIN32 */
-#include <stddef.h>  /* ptrdiff_t */
 #include <stdio.h>
+#include <stddef.h>  /* ptrdiff_t */
+#include <stdlib.h>  /* malloc */
+#include <string.h>  /* strncmp, strcpy, strcat */
+#include <sys/stat.h>  /* fchmod */
 
 /* PyInstaller headers. */
 #include "zlib.h"
@@ -360,25 +336,6 @@ cleanup:
     return rc;
 }
 
-/*
- * Try matching 8 bytes from the given buffer against the archive's
- * COOKIE MAGIC pattern, in a way that prevents storing the MAGIC
- * pattern in a matchable form anywhere in the executable.
- *
- * Returns 1 if buf matches the MAGIC pattern, 0 otherwise.
- */
-static int _pyi_match_magic(unsigned char *buf)
-{
-    /* MAGIC pattern (8 bytes): { 'M', 'E', 'I', 014, 013, 012, 013, 016 }
-       Stored in two parts and separated by unused data to prevent
-       direct matches on itself when scanning the executable. */
-    static const unsigned char MAGIC[] = {
-        'M', 'E', 'I', 014,  /* first part */
-        013, 016, 016, 017,
-        013, 012, 013, 016   /* second part */
-    };
-    return memcmp(buf, MAGIC, 4) == 0 && memcmp(buf+4, MAGIC+8, 4) == 0;
-}
 
 /*
  * Perform full back-to-front scan of the file to search for the
@@ -387,76 +344,21 @@ static int _pyi_match_magic(unsigned char *buf)
  * Returns offset within the file if MAGIC pattern is found, 0 otherwise.
  */
 static uint64_t
-_pyi_find_cookie_offset(FILE *fp)
+_pyi_find_pkg_cookie_offset(FILE *fp)
 {
-    const size_t MAGIC_SIZE = 8;  /* 8-byte pattern */
-    static const int SEARCH_CHUNK_SIZE = 8192;
-    unsigned char *buffer = NULL;
-    uint64_t start_pos, end_pos;
-    uint64_t offset = 0;  /* return value */
+    /* Prepare MAGIC pattern; we need to do this programmatically to
+     * prevent the pattern itself being stored in the code and matched
+     * when we scan the executable */
+    unsigned char magic[8];
+    memcpy(magic, MAGIC_BASE, sizeof(magic));
+    magic[3] += 0x0C; /* 0x00 -> 0x0C */
 
-    /* Allocate the read buffer */
-    buffer = malloc(SEARCH_CHUNK_SIZE);
-    if (!buffer) {
-        VS("LOADER: failed to allocate read buffer (%d bytes)!\n", SEARCH_CHUNK_SIZE);
-        goto cleanup;
-    }
-
-    /* Determine file size */
-    if (pyi_fseek(fp, 0, SEEK_END) < 0) {
-        VS("LOADER: failed to seek to the end of the file!\n");
-        goto cleanup;
-    }
-    end_pos = pyi_ftell(fp);
-
-    /* Sanity check */
-    if (end_pos < MAGIC_SIZE) {
-        VS("LOADER: file is too short!\n");
-        goto cleanup;
-    }
-
-    /* Search the file back to front, in overlapping SEARCH_CHUNK_SIZE
-     * chunks. */
-    do {
-        size_t chunk_size;
-        start_pos = (end_pos >= SEARCH_CHUNK_SIZE) ? (end_pos - SEARCH_CHUNK_SIZE) : 0;
-        chunk_size = (size_t)(end_pos - start_pos);
-
-        /* Is the remaining chunk large enough to hold the pattern? */
-        if (chunk_size < MAGIC_SIZE) {
-            break;
-        }
-
-        /* Read the chunk */
-        if (pyi_fseek(fp, start_pos, SEEK_SET) < 0) {
-            VS("LOADER: failed to seek to the offset 0x%" PRIX64 "!\n", start_pos);
-            goto cleanup;
-        }
-        if (fread(buffer, 1, chunk_size, fp) != chunk_size) {
-            VS("LOADER: failed to read chunk (%zd bytes)!\n", chunk_size);
-            goto cleanup;
-        }
-
-        /* Scan the chunk */
-        for (size_t i = chunk_size - MAGIC_SIZE + 1; i > 0; i--) {
-            if (_pyi_match_magic(buffer + i - 1)) {
-                offset = start_pos + i - 1;
-                goto cleanup;
-            }
-        }
-
-        /* Adjust search location for next chunk; ensure proper overlap */
-        end_pos = start_pos + MAGIC_SIZE - 1;
-    } while (start_pos > 0);
-
-cleanup:
-    free(buffer);
-
-    return offset;
+    /* Search using the helper */
+    return pyi_utils_find_magic_pattern(fp, magic, sizeof(magic));
 }
 
 /*
- * Fix the endianess of fields in the TOC entries.
+ * Fix the endianness of fields in the TOC entries.
  */
 static void
 _pyi_arch_fix_toc_endianess(ARCHIVE_STATUS *status)
@@ -491,7 +393,7 @@ pyi_arch_open(ARCHIVE_STATUS *status)
     }
 
     /* Search for the embedded archive's cookie */
-    cookie_pos = _pyi_find_cookie_offset(status->fp);
+    cookie_pos = _pyi_find_pkg_cookie_offset(status->fp);
     if (cookie_pos == 0) {
         VS("LOADER: Cannot find cookie!\n");
         return -1;
@@ -507,7 +409,7 @@ pyi_arch_open(ARCHIVE_STATUS *status)
         FATAL_PERROR("fread", "Failed to read cookie!\n");
         return -1;
     }
-    /* Fix endianess of COOKIE fields */
+    /* Fix endianness of COOKIE fields */
     status->cookie.len = pyi_be32toh(status->cookie.len);
     status->cookie.TOC = pyi_be32toh(status->cookie.TOC);
     status->cookie.TOClen = pyi_be32toh(status->cookie.TOClen);
@@ -544,7 +446,7 @@ pyi_arch_open(ARCHIVE_STATUS *status)
         return -1;
     }
 
-    /* Fix the endianess of the fields in the TOC entries */
+    /* Fix the endianness of the fields in the TOC entries */
     _pyi_arch_fix_toc_endianess(status);
 
     /* Close file handler
@@ -558,20 +460,19 @@ pyi_arch_open(ARCHIVE_STATUS *status)
  * Sets f_archivename, f_homepath, f_mainpath
  */
 bool
-pyi_arch_setup(ARCHIVE_STATUS *status, char const * archivePath)
+pyi_arch_setup(ARCHIVE_STATUS *status, char const * archive_path, char const * executable_path)
 {
-    /* Get the archive Path */
-    if (strlen(archivePath) >= PATH_MAX) {
-        // Should never come here, since `archivePath` was already processed
-        // by pyi_path_executable or pyi_path_archivefile.
+    /* Copy archive path and executable path */
+    if (snprintf(status->archivename, PATH_MAX, "%s", archive_path) >= PATH_MAX) {
         return false;
     }
-
-    strcpy(status->archivename, archivePath);
+    if (snprintf(status->executablename, PATH_MAX, "%s", executable_path) >= PATH_MAX) {
+        return false;
+    }
     /* Set homepath to where the archive is */
-    pyi_path_dirname(status->homepath, archivePath);
+    pyi_path_dirname(status->homepath, archive_path);
     /*
-     * Initial value of mainpath is homepath. It might be overriden
+     * Initial value of mainpath is homepath. It might be overridden
      * by temppath if it is available.
      */
     status->has_temp_directory = false;
@@ -679,6 +580,23 @@ pyi_arch_get_option(const ARCHIVE_STATUS * status, char * optname)
 
             }
         }
+    }
+    return NULL;
+}
+
+/*
+ * Find a TOC entry by its name and return it.
+ */
+TOC *
+pyi_arch_find_by_name(ARCHIVE_STATUS *status, const char *name)
+{
+    TOC *ptoc = status->tocbuff;
+
+    while (ptoc < status->tocend) {
+        if (strcmp(ptoc->name, name) == 0) {
+            return ptoc;
+        }
+        ptoc = pyi_arch_increment_toc_ptr(status, ptoc);
     }
     return NULL;
 }

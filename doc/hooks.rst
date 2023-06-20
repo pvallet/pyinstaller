@@ -3,15 +3,13 @@
 Understanding PyInstaller Hooks
 ==================================
 
-.. py:currentmodule:: PyInstaller.utils.hooks
-
 .. note::
 
    We strongly encourage package developers
    to provide hooks with their packages.
    See section :ref:`provide hooks with package` for how easy this is.
 
-In summary, a "hook" file extends |PyInstaller| to adapt it to
+In summary, a "hook" file extends PyInstaller to adapt it to
 the special needs and methods used by a Python package.
 The word "hook" is used for two kinds of files.
 A *runtime* hook helps the bootloader to launch an app.
@@ -20,16 +18,16 @@ Other hooks run while an app is being analyzed.
 They help the Analysis phase find needed files.
 
 The majority of Python packages use normal methods of importing
-their dependencies, and |PyInstaller| locates all their files without difficulty.
+their dependencies, and PyInstaller locates all their files without difficulty.
 But some packages make unusual uses of the Python import mechanism,
 or make clever changes to the import system at runtime.
-For this or other reasons, |PyInstaller| cannot reliably find
+For this or other reasons, PyInstaller cannot reliably find
 all the needed files, or may include too many files.
 A hook can tell about additional source files or data files to import,
 or files not to import.
 
 A hook file is a Python script, and can use all Python features.
-It can also import helper methods from ``PyInstaller.utils.hooks``
+It can also import helper methods from :mod:`PyInstaller.utils.hooks`
 and useful variables from ``PyInstaller.compat``.
 These helpers are documented below.
 
@@ -37,7 +35,7 @@ The name of a hook file is :file:`hook-{full.import.name}.py`,
 where *full.import.name* is
 the fully-qualified name of an imported script or module.
 You can browse through the existing hooks in the
-``hooks`` folder of the |PyInstaller| distribution folder
+``hooks`` folder of the PyInstaller distribution folder
 and see the names of the packages for which hooks have been written.
 For example ``hook-PyQt5.QtCore.py`` is a hook file telling
 about hidden imports needed by the module ``PyQt5.QtCore``.
@@ -69,7 +67,7 @@ Examples of these actions are shown below.
 When the module that needs these hidden imports is useful only to your project,
 store the hook file(s) somewhere near your source file.
 Then specify their location to the ``pyinstaller`` or ``pyi-makespec``
-command with the ``--additional-hooks-dir=`` option.
+command with the :option:`--additional-hooks-dir` option.
 If the hook file(s) are at the same level as the script,
 the command could be simply::
 
@@ -96,9 +94,9 @@ The names defined by these statements are visible to Analysis
 as attributes of the namespace.
 
 Thus a hook is a normal Python script and can use all normal Python facilities.
-For example it could test ``sys.version`` and adjust its
+For example it could test :data:`sys.version` and adjust its
 assignment to ``hiddenimports`` based on that.
-There are many hooks in the |PyInstaller| installation,
+There are many hooks in the PyInstaller installation,
 but a much larger collection can be found in the
 `community hooks package <https://github.com/pyinstaller/pyinstaller-hooks-contrib>`_.
 Please browse through them for examples.
@@ -118,7 +116,7 @@ might catch up with these changes.
 If both PyInstaller and your package provide hooks for some module,
 your package's hooks take precedence,
 but can still be overridden by the command line option
-``--additional-hooks-dir``.
+:option:`--additional-hooks-dir`.
 
 
 You can tell PyInstaller about the additional hooks
@@ -141,7 +139,7 @@ This defines two entry-points:
    It must return a sequence of strings,
    each element of which provides an additional absolute path
    to search for hooks.
-   This is equivalent to passing the ``--additional-hooks-dir``
+   This is equivalent to passing the :option:`--additional-hooks-dir`
    command-line option to PyInstaller for each string in the sequence.
 
    In this example, the function is ``get_hook_dirs() -> List[str]``.
@@ -181,7 +179,7 @@ applies them to the bundle being created.
 ``hiddenimports``
     A list of module names (relative or absolute) that should
     be part of the bundled app.
-    This has the same effect as the ``--hidden-import`` command line option,
+    This has the same effect as the :option:`--hidden-import` command line option,
     but it can contain a list of names and is applied automatically
     only when the hooked module is imported.
     Example::
@@ -199,7 +197,7 @@ applies them to the bundle being created.
     Several hooks use this to prevent automatic inclusion of
     the ``tkinter`` module. Example::
 
-        excludedimports = [modname_tkinter]
+        excludedimports = ['tkinter']
 
 ``datas``
    A list of files to bundle with the app as data.
@@ -214,7 +212,7 @@ applies them to the bundle being created.
       datas = [ ('/usr/share/icons/education_*.png', 'icons') ]
 
    If you need to collect multiple directories or nested directories,
-   you can use helper functions from the ``PyInstaller.utils.hooks`` module
+   you can use helper functions from the :mod:`PyInstaller.utils.hooks` module
    (see below) to create this list, for example::
 
       datas  = collect_data_files('submodule1')
@@ -243,251 +241,201 @@ applies them to the bundle being created.
 
       binaries = collect_dynamic_libs('zmq')
 
+``warn_on_missing_hiddenimports``
+   A boolean flag indicating whether missing hidden imports from the
+   hook (set via ``hiddenimports``) should generate warnings or not.
+   By default, missing hidden imports generate warnings, but individual
+   hooks can opt out of this behavior by setting this variable to ``False``.
+   Example::
+
+      warn_on_missing_hiddenimports = False
+
+.. _package collection mode:
+
+``module_collection_mode``
+   A setting controlling the collection mode for module(s). The value
+   can be either a string or a dictionary.
+
+   When set to a string, the variable controls the collection mode for
+   the hooked package/module. Valid values are:
+
+   * ``'pyz'``: collect byte-compiled modules into the embedded PYZ
+     archive. This is the default behavior when no collection mode is
+     specified. If the ``noarchive`` flag is used with ``Analysis``,
+     the PYZ archive is not used, and ``pyz`` collection mode is
+     automatically turned into ``pyc`` one.
+
+   * ``'pyc'``: collect byte-compiled modules as external data files
+     (as opposed to collecting them into the PYZ archive).
+
+   * ``'py'``: collect source .py files as external data files. Do not
+     collect byte-compiled modules.
+
+   * ``'pyz+py'`` or ``'py+pyz'``: collect byte-compiled modules into
+     the embedded PYZ archive and collect corresponding source .py files
+     as external data files.
+
+     If ``noarchive`` flag is in effect, the byte-compiled modules are
+     collected as external data files, which causes python to ignore
+     them due to the source files being placed next to them.
+
+   The setting is applied to all child modules and subpackages, unless
+   overridden by the setting in their corresponding hook.
+
+   Alternatively, the variable can be set to a dictionary comprising
+   module/package names and corresponding collection mode strings.
+   This allows a hook to specify different settings for its main package
+   and subpackages, but also settings for other packages. When multiple
+   hooks provide a setting for the same module name, the end result
+   depends on the hook execution order.
+
+   Example::
+
+      # hook-mypackage.py
+
+      # This package must be collected in source form, due to its code
+      # searching for .py files on the filesystem...
+      module_collection_mode = 'py'
+
+   Example::
+
+      # hook-mypackage.py
+
+      # Collect only a sub-package / module as source
+      # (without creating a hook for the sub-package).
+      module_collection_mode = {
+         'mypackage.src_subpackage': 'py'
+      }
+
+   Example::
+
+      # hook-mypackage.py
+
+      # Collect whole package as source except for a single sub-package
+      # (without creating a hook for the sub-package).
+      module_collection_mode = {
+         'mypackage': 'py',
+         'mypackage.bin_subpackage': 'pyz'
+      }
+
+   Example::
+
+      # hook-mypackage.py
+
+      # Force collection of other packages in source form.
+      module_collection_mode = {
+         'myotherpackage1': 'py',
+         'myotherpackage2': 'py',
+      }
+
+   The ability to control collection mode for other modules/packages
+   from a given hook is intended for cases when the hooked module
+   provides functionality for other modules that requires those other
+   modules to be collected in the source form (for example, JIT compilation
+   available in some deep learning frameworks). However, detection of
+   specific function imports and calls via bytecode scanning requires
+   an access to the modulegraph, and consequently the use of the
+   `the hook(hook_api) function`_. In such cases, the collection mode
+   can be modified using the `set_module_collection_mode method`_ from
+   the ``hook_api`` object instead of setting the global hook variable.
+
 
 Useful Items in ``PyInstaller.compat``
 ----------------------------------------
 
-A hook may import the following names from ``PyInstaller.compat``,
+.. automodule:: PyInstaller.compat
+.. py:currentmodule:: PyInstaller.compat
+
+A hook may import the following names from :mod:`PyInstaller.compat`,
 for example::
 
-   from PyInstaller.compat import modname_tkinter, is_win
+   from PyInstaller.compat import base_prefix, is_win
 
-``is_py36``, ``is_py37``, ``is_py38``, ``is_py39``:
-   True when the current version of Python is at least 3.6, 3.7, 3.8 or 3.9 respectively.
+.. py:data:: is_py36, is_py37, is_py38, is_py39, is_py310 is_py311
 
-``is_win``:
+    True when the current version of Python is at least 3.6, 3.7, 3.8, 3.9,
+    or 3.10, 3.11 respectively.
+
+.. py:data::  is_win
+
    True in a Windows system.
-``is_cygwin``:
-   True when ``sys.platform=='cygwin'``.
-``is_darwin``:
-   True in Mac OS X.
-``is_linux``:
-   True in any GNU/Linux system (``sys.platform.startswith('linux')``).
-``is_solar``:
+
+.. py:data:: is_cygwin
+
+   True when ``sys.platform == 'cygwin'``.
+
+.. py:data:: is_darwin
+
+   True in macOS.
+
+.. py:data:: is_linux
+
+   True in any GNU/Linux system.
+
+.. py:data:: is_solar
+
    True in Solaris.
-``is_aix``:
+
+.. py:data:: is_aix
+
    True in AIX.
-``is_freebsd``:
+
+.. py:data:: is_freebsd
+
    True in FreeBSD.
-``is_openbsd``:
+
+.. py:data:: is_openbsd
+
    True in OpenBSD.
 
-``is_venv``:
+.. py:data:: is_venv
+
    True in any virtual environment (either virtualenv or venv).
-``base_prefix``:
+
+.. py:data:: base_prefix
+
    String, the correct path to the base Python installation,
    whether the installation is native or a virtual environment.
 
-``modname_tkinter``:
-   String ``tkinter`` (this module was named differently in Python 2).
-   To prevent an unnecessary import of Tkinter, write::
+.. py:data:: EXTENSION_SUFFIXES
 
-      from PyInstaller.compat import modname_tkinter
-      excludedimports = [ modname_tkinter ]
-
-``EXTENSION_SUFFIXES``:
    List of Python C-extension file suffixes. Used for finding all
-   binary dependencies in a folder; see file:`hook-cryptography.py`
+   binary dependencies in a folder; see :file:`hook-cryptography.py`
    for an example.
+
 
 Useful Items in ``PyInstaller.utils.hooks``
 --------------------------------------------
 
-A hook may import useful functions from ``PyInstaller.utils.hooks``.
+.. py:currentmodule:: PyInstaller.utils.hooks
+
+.. automodule:: PyInstaller.utils.hooks
+
+A hook may import useful functions from :mod:`PyInstaller.utils.hooks`.
 Use a fully-qualified import statement, for example::
 
    from PyInstaller.utils.hooks import collect_data_files, eval_statement
 
-The ``PyInstaller.utils.hooks`` functions listed here are generally useful
-and used in a number of existing hooks.
-There are several more functions besides these that serve the needs
-of specific hooks, such as hooks for PyQt5.
-You are welcome to read the ``PyInstaller.utils.hooks`` module
-(and read the existing hooks that import from it) to get code and ideas.
+The functions listed here are generally useful and used in a number of existing
+hooks.
 
-``exec_statement( 'statement' )``:
-   Execute a single Python statement in an externally-spawned interpreter
-   and return the standard output that results, as a string.
-   Examples::
-
-     tk_version = exec_statement(
-        "from _tkinter import TK_VERSION; print(TK_VERSION)"
-        )
-
-     mpl_data_dir = exec_statement(
-        "import matplotlib; print(matplotlib._get_data_path())"
-        )
-     datas = [ (mpl_data_dir, "") ]
-
-``eval_statement( 'statement' )``:
-   Execute a single Python statement in an externally-spawned interpreter.
-   If the resulting standard output text is not empty, apply
-   the ``eval()`` function to it; else return None. Example::
-
-      databases = eval_statement('''
-         import sqlalchemy.databases
-         print(sqlalchemy.databases.__all__)
-         ''')
-      for db in databases:
-         hiddenimports.append("sqlalchemy.databases." + db)
-
-``is_module_satisfies( requirements, version=None, version_attr='__version__' )``:
-   Check that the named module (fully-qualified) exists and satisfies the
-   given requirement. Example::
-
-       if is_module_satisfies('sqlalchemy >= 0.6'):
-
-   This function provides robust version checking based on the same low-level
-   algorithm used by ``easy_install`` and ``pip``, and should always be
-   used in preference to writing your own comparison code.
-   In particular, version strings should never be compared lexicographically
-   (except for exact equality).
-   For example ``'00.5' > '0.6'`` returns True, which is not the desired result.
-
-   The ``requirements`` argument uses the same syntax as supported by
-   the `Package resources`_ module of setup tools (follow the link to
-   see the supported syntax).
-
-   The optional ``version`` argument is is a PEP0440-compliant,
-   dot-delimited version specifier such as ``'3.14-rc5'``.
-
-   When the package being queried has been installed by ``easy_install``
-   or ``pip``, the existing setup tools machinery is used to perform the test
-   and the ``version`` and ``version_attr`` arguments are ignored.
-
-   When that is not the case, the ``version`` argument is taken as the
-   installed version of the package
-   (perhaps obtained by interrogating the package in some other way).
-   When ``version`` is ``None``, the named package is imported into a
-   subprocess, and the ``__version__`` value of that import is tested.
-   If the package uses some other name than ``__version__`` for its version
-   global, that name can be passed as the ``version_attr`` argument.
-
-   For more details and examples refer to the function's doc-string, found
-   in ``Pyinstaller/utils/hooks/__init__.py``.
-
-
-``collect_all( 'package-name', include_py_files=False )``:
-   Given a package name as a string, this function returns a tuple of ``datas, binaries,
-   hiddenimports`` containing all data files, binaries, and modules in the given
-   package, including any modules specified in the requirements for the
-   distribution of this module. The value of ``include_py_files`` is passed
-   directly to ``collect_data_files``.
-
-   Typical use: ``datas, binaries, hiddenimports = collect_all('my_module_name')``.
-   For example, ``hook-gevent.py`` invokes ``collect_all``, which gathers:
-
-   * All data files, such as ``__greenlet_primitives.pxd``, ``__hub_local.pxd``,
-     and many, many more.
-   * All binaries, such as ``__greenlet_primitives.cp37-win_amd64.pyd`` (on a
-     Windows 64-bit install) and many, many more.
-   * All modules in ``gevent``, such as ``gevent.threadpool``,
-     ``gevent._semaphore``, and many, many more.
-   * All requirements. ``pip show gevent`` gives ``Requires: cffi, greenlet``.
-     Therefore, the ``cffi`` and ``greenlet`` modules are included.
-
-``collect_submodules( 'package-name', pattern=None )``:
-   Returns a list of strings that specify all the modules in a package,
-   ready to be assigned to the ``hiddenimports`` global.
-   Returns an empty list when ``package`` does not name a package
-   (a package is defined as a module that contains a ``__path__`` attribute).
-
-   The ``pattern``, if given, is function to filter through the submodules
-   found, selecting which should be included in the returned list. It takes one
-   argument, a string, which gives the name of a submodule. Only if the
-   function returns true is the given submodule is added to the list of
-   returned modules. For example, ``filter=lambda name: 'test' not in
-   name`` will return modules that don't contain the word ``test``.
-
-``is_module_or_submodule( name, mod_or_submod )``:
-   This helper function is designed for use in the ``filter`` argument of
-   ``collect_submodules``, by returning ``True`` if the given ``name`` is
-   a module or a submodule of ``mod_or_submod``. For example:
-   ``collect_submodules('foo', lambda name: not is_module_or_submodule(name,
-   'foo.test'))`` excludes ``foo.test`` and ``foo.test.one`` but not
-   ``foo.testifier``.
-
-``collect_data_files( package, include_py_files=False, subdir=None, excludes=None, includes=None )``:
-    This routine produces a list of ``(source, dest)`` non-Python (i.e. data)
-    files which reside in ``package``. Its results can be directly assigned to
-    ``datas`` in a hook script; see, for example, ``hook-sphinx.py``.
-    Parameters:
-
-    -   The ``package`` parameter is a string which names the package.
-    -   By default, all Python executable files (those ending in ``.py``,
-        ``.pyc``, and so on) will NOT be collected; setting the
-        ``include_py_files`` argument to ``True`` collects these files as well.
-        This is typically used with Python routines (such as those in
-        ``pkgutil``) that search a given directory for Python executable files
-        then load them as extensions or plugins.
-    -   The ``subdir`` argument gives a subdirectory relative to ``package`` to
-        search, which is helpful when submodules are imported at run-time from a
-        directory lacking ``__init__.py``.
-    -   The ``excludes`` argument contains a sequence of strings or Paths. These
-        provide a list of `globs <https://docs.python.org/3/library/pathlib.html#pathlib.Path.glob>`_
-        to exclude from the collected data files; if a directory matches the
-        provided glob, all files it contains will be excluded as well. All
-        elements must be relative paths, which are relative to the provided
-        package's path (/ ``subdir`` if provided).
-
-        Therefore, ``*.txt`` will exclude only ``.txt`` files in ``package``\ 's
-        path, while ``**/*.txt`` will exclude all ``.txt`` files in
-        ``package``\ 's path and all its subdirectories. Likewise,
-        ``**/__pycache__`` will exclude all files contained in any subdirectory
-        named ``__pycache__``.
-    -   The ``includes`` function like ``excludes``, but only include matching
-        paths. ``excludes`` override ``includes``: a file or directory in both
-        lists will be excluded.
-
-    This function does not work on zipped Python eggs.
-
-``collect_dynamic_libs( 'module-name' )``:
-   Returns a list of (source, dest) tuples for all the dynamic libs
-   present in a module directory.
-   The list is ready to be assigned to the ``binaries`` global variable.
-   The function uses ``os.walk()`` to examine all files in the
-   module directory recursively.
-   The name of each file found is tested against the likely patterns for
-   a dynamic lib: ``*.dll``, ``*.dylib``, ``lib*.pyd``, and ``lib*.so``.
-   Example::
-
-      binaries = collect_dynamic_libs( 'enchant' )
-
-``get_module_file_attribute( 'module-name' )``:
-   Return the absolute path to *module-name*, a fully-qualified module name.
-   Example::
-
-      nacl_dir = os.path.dirname(get_module_file_attribute('nacl'))
-
-``get_package_paths( 'package-name' )``:
-   Given the name of a package, return a tuple.
-   The first element is the absolute path to the folder where the package is stored.
-   The second element is the absolute path to the named package.
-   For example, if ``pkg.subpkg`` is stored in ``/abs/Python/lib``
-   the result of::
-
-      get_package_paths( 'pkg.subpkg' )
-
-   is the tuple, ``( '/abs/Python/lib', '/abs/Python/lib/pkg/subpkg' )``
-
+.. autofunction:: exec_statement
+.. autofunction:: eval_statement
+.. autofunction:: is_module_satisfies
+.. autofunction:: collect_all
+.. autofunction:: collect_submodules
+.. autofunction:: is_module_or_submodule
+.. autofunction:: is_package
+.. autofunction:: collect_data_files
+.. autofunction:: collect_dynamic_libs
+.. autofunction:: get_module_file_attribute
+.. autofunction:: get_module_attribute
+.. autofunction:: get_package_paths
 .. autofunction:: copy_metadata
-
-.. autofunction:: PyInstaller.utils.hooks.collect_entry_point
-
-``get_homebrew_path( formula='' )``:
-   Return the homebrew path to the named formula, or to the
-   global prefix when formula is omitted. Returns None if
-   not found.
-
-
-``django_find_root_dir()``:
-   Return the path to the top-level Python package containing
-   the Django files, or None if nothing can be found.
-
-``django_dottedstring_imports( 'django-root-dir' )``:
-   Return a list of all necessary Django modules specified in
-   the Django settings.py file, such as the
-   ``Django.settings.INSTALLED_APPS`` list and many others.
+.. autofunction:: collect_entry_point
+.. autofunction:: get_homebrew_path
+.. autofunction:: include_or_exclude_file
+.. autofunction:: collect_delvewheel_libs_directory
 
 
 Support for Conda
@@ -511,6 +459,19 @@ Support for Conda
 .. autofunction:: PyInstaller.utils.hooks.conda.walk_dependency_tree
 
 .. autofunction:: PyInstaller.utils.hooks.conda.collect_dynamic_libs
+
+
+Subprocess isolation with :mod:`PyInstaller.isolated`
+-----------------------------------------------------
+
+.. currentmodule:: PyInstaller.isolated
+.. automodule:: PyInstaller.isolated
+.. autofunction:: call
+.. autofunction:: decorate
+.. autoclass:: Python
+    :members: call
+.. currentmodule:: PyInstaller.utils.hooks
+
 
 .. _the hook(hook_api) function:
 
@@ -542,10 +503,17 @@ which has the following immutable properties:
       * A non-package module or C extension, this is the absolute path of the
         corresponding file.
 
-``__path__``:
+:attr:`__path__`:
    A list of the absolute paths of all directories comprising the module
    if it is a package, or ``None``. Typically the list contains only the
    absolute path of the package's directory.
+
+``co``:
+    Code object compiled from the contents of ``__file__`` (e.g., via the
+    :func:`compile` builtin).
+
+``analysis``:
+    The ``Analysis`` object that loads the hook.
 
 The ``hook_api`` object also offers the following methods:
 
@@ -553,12 +521,6 @@ The ``hook_api`` object also offers the following methods:
    The ``names`` argument may be a single string or a list of strings
    giving the fully-qualified name(s) of modules to be imported.
    This has the same effect as adding the names to the ``hiddenimports`` global.
-
-``del_imports( *names )``:
-   The ``names`` argument may be a single string or a list of strings,
-   giving the fully-qualified name(s) of modules that are not
-   to be included if they are imported only by the hooked module.
-   This has the same effect as adding names to the ``excludedimports`` global.
 
 ``add_datas( tuple_list )``:
    The ``tuple_list`` argument has the format used with the ``datas`` global
@@ -568,10 +530,27 @@ The ``hook_api`` object also offers the following methods:
    The ``tuple_list`` argument has the format used with the ``binaries``
    global variable. This call has the effect of adding items to that list.
 
+.. _set_module_collection_mode method:
+
+``set_module_collection_mode ( name, mode )``:
+   Set the `package collection mode`_ for the specified package/module name.
+   Valid values for ``mode`` are: ``'pyz'``, ``'pyc'``, ``'py'``,
+   ``'pyz+py'``, ``'py+pyz'`` and ``None``. ``None`` clears/resets the
+   setting for the given package/module name - but only within the
+   current hook's context! The collection mode may be set for the hooked
+   package, its sub-module or sub-package, or for other packages. If ``name``
+   is ``None``, it is substituted with the hooked package/module name.
+
 The ``hook()`` function can add, remove or change included files using the
 above methods of ``hook_api``.
 Or, it can simply set values in the four global variables, because
 these will be examined after ``hook()`` returns.
+
+Hooks may access the user parameters, given in the ``hooksconfig`` argument in
+the spec file, by calling :func:`~PyInstaller.utils.hooks.get_hook_config`
+inside a `hook()` function.
+
+.. autofunction:: PyInstaller.utils.hooks.get_hook_config
 
 The ``pre_find_module_path( pfmp_api )`` Method
 ------------------------------------------------
@@ -583,9 +562,9 @@ by Analysis, before it has located the path to that module or package
 
 Hooks of this type are only recognized if they are stored in
 a sub-folder named ``pre_find_module_path`` in a hooks folder,
-either in the distributed hooks folder or an ``--additional-hooks-dir`` folder.
+either in the distributed hooks folder or an :option:`--additional-hooks-dir` folder.
 You may have normal hooks as well as hooks of this type for the same module.
-For example |PyInstaller| includes both a ``hooks/hook-distutils.py``
+For example PyInstaller includes both a ``hooks/hook-distutils.py``
 and also a ``hooks/pre_find_module_path/hook-distutils.py``.
 
 The ``pfmp_api`` object that is passed has the following immutable attribute:
@@ -606,7 +585,7 @@ of ``search_dirs`` will be used to find and analyze the module.
 For an example of use,
 see the file :file:`hooks/pre_find_module_path/hook-distutils.py`.
 It uses this method to redirect a search for distutils when
-|PyInstaller| is executing in a virtual environment.
+PyInstaller is executing in a virtual environment.
 
 
 The ``pre_safe_import_module( psim_api )`` Method
@@ -628,7 +607,7 @@ However, if there are normal hooks for these names, they will be called.
 
 Hooks of this type are only recognized if they are stored in a sub-folder
 named ``pre_safe_import_module`` in a hooks folder,
-either in the distributed hooks folder or an ``--additional-hooks-dir`` folder.
+either in the distributed hooks folder or an :option:`--additional-hooks-dir` folder.
 (See the distributed ``hooks/pre_safe_import_module`` folder for examples.)
 
 You may have normal hooks as well as hooks of this type for the same module.
@@ -655,7 +634,7 @@ all of which are immutable (an attempt to change one raises an exception):
 
 The last two items, ``module_graph`` and ``parent_package``,
 are related to the module-graph, the internal data structure used by
-|PyInstaller| to document all imports.
+PyInstaller to document all imports.
 Normally you do not need to know about the module-graph.
 
 The ``psim_api`` object also offers the following methods:
@@ -663,7 +642,7 @@ The ``psim_api`` object also offers the following methods:
 ``add_runtime_module( fully_qualified_name )``:
    Use this method to add an imported module whose name may not
    appear in the source because it is dynamically defined at run-time.
-   This is useful to make the module known to |PyInstaller| and avoid misleading warnings.
+   This is useful to make the module known to PyInstaller and avoid misleading warnings.
    A typical use applies the name from the ``psim_api``::
 
       psim_api.add_runtime_module( psim_api.module_name )
@@ -674,16 +653,16 @@ The ``psim_api`` object also offers the following methods:
    (it will be added to the graph if it has not already been imported).
    ``alias_module_name`` is a name that might be referenced in the
    source file but should be treated as if it were ``real_module_name``.
-   This method ensures that if |PyInstaller| processes an import of
+   This method ensures that if PyInstaller processes an import of
    ``alias_module_name`` it will use ``real_module_name``.
 
 ``append_package_path( directory )``:
    The hook can use this method to add a package path
-   to be searched by |PyInstaller|, typically an import
+   to be searched by PyInstaller, typically an import
    path that the imported module would add dynamically to
    the path if the module was executed normally.
    ``directory`` is a string, a pathname to add to the
-   ``__path__`` attribute.
+   :attr:`__path__` attribute.
 
 
 .. include:: _common_definitions.txt

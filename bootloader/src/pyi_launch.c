@@ -1,6 +1,6 @@
 /*
  * ****************************************************************************
- * Copyright (c) 2013-2021, PyInstaller Development Team.
+ * Copyright (c) 2013-2023, PyInstaller Development Team.
  *
  * Distributed under the terms of the GNU General Public License (version 2
  * or later) with exception for distributing the bootloader.
@@ -38,9 +38,11 @@
 #include "pyi_path.h"
 #include "pyi_archive.h"
 #include "pyi_utils.h"
+#include "pyi_splash.h"
 #include "pyi_python.h"
 #include "pyi_pythonlib.h"
 #include "pyi_win32_utils.h"  /* CreateActContext */
+#include "pyi_exception_dialog.h"
 
 /* Max count of possible opened archives in multipackage mode. */
 #define _MAX_ARCHIVE_POOL_LEN 20
@@ -50,8 +52,10 @@
  * declarations are not necessary.
  */
 
+/* Constructs the file path from given components and checks that the path exists. */
+/* NOTE: must be visible outside of this unit (i.e., non-static) due to tests! */
 int
-checkFile(char *buf, const char *fmt, ...)
+_format_and_check_path(char *buf, const char *fmt, ...)
 {
     va_list args;
     struct stat tmp;
@@ -66,12 +70,13 @@ checkFile(char *buf, const char *fmt, ...)
 }
 
 /* Splits the item in the form path:filename */
+/* NOTE: must be visible outside of this unit (i.e., non-static) due to tests! */
 int
-splitName(char *path, char *filename, const char *item)
+_split_dependency_name(char *path, char *filename, const char *item)
 {
     char *p;
 
-    VS("LOADER: Splitting item into path and filename\n");
+    VS("LOADER: Splitting dependency name into path and filename\n");
     // copy directly into destination buffer and manipulate there
     if (snprintf(path, PATH_MAX, "%s", item) >= PATH_MAX) {
         return -1;
@@ -91,18 +96,14 @@ splitName(char *path, char *filename, const char *item)
 
 /* Copy the dependencies file from a directory to the tempdir */
 static int
-copyDependencyFromDir(ARCHIVE_STATUS *status, const char *srcpath, const char *filename)
+_copy_dependency_from_dir(ARCHIVE_STATUS *status, const char *srcpath, const char *filename)
 {
     if (pyi_create_temp_path(status) == -1) {
         return -1;
     }
 
     VS("LOADER: Coping file %s to %s\n", srcpath, status->temppath);
-
-    if (pyi_copy_file(srcpath, status->temppath, filename) == -1) {
-        return -1;
-    }
-    return 0;
+    return pyi_copy_file(srcpath, status->temppath, filename);
 }
 
 /*
@@ -141,10 +142,8 @@ _get_archive(ARCHIVE_STATUS *archive_pool[], const char *path)
     }
 
     if ((snprintf(archive->archivename, PATH_MAX, "%s", path) >= PATH_MAX) ||
-        (snprintf(archive->homepath, PATH_MAX, "%s",
-                  archive_pool[SELF]->homepath) >= PATH_MAX) ||
-        (snprintf(archive->temppath, PATH_MAX, "%s",
-                  archive_pool[SELF]->temppath) >= PATH_MAX)) {
+        (snprintf(archive->homepath, PATH_MAX, "%s", archive_pool[SELF]->homepath) >= PATH_MAX) ||
+        (snprintf(archive->temppath, PATH_MAX, "%s", archive_pool[SELF]->temppath) >= PATH_MAX)) {
         FATALERROR("Archive path exceeds PATH_MAX\n");
         pyi_arch_status_free(archive);
         return NULL;
@@ -157,7 +156,7 @@ _get_archive(ARCHIVE_STATUS *archive_pool[], const char *path)
     archive->has_temp_directory = archive_pool[SELF]->has_temp_directory;
 
     if (pyi_arch_open(archive)) {
-        FATAL_PERROR("malloc", "Error opening archive %s\n", path);
+        FATALERROR("Failed to open archive %s!\n", path);
         pyi_arch_status_free(archive);
         return NULL;
     }
@@ -168,21 +167,19 @@ _get_archive(ARCHIVE_STATUS *archive_pool[], const char *path)
 
 /* Extract a file identifed by filename from the archive associated to status. */
 static int
-extractDependencyFromArchive(ARCHIVE_STATUS *status, const char *filename)
+_extract_dependency_from_archive(ARCHIVE_STATUS *status, const char *filename)
 {
-    TOC * ptoc = status->tocbuff;
+    TOC *ptoc = status->tocbuff;
 
-    VS("LOADER: Extracting dependencies from archive\n");
+    VS("LOADER: Extracting dependency %s from archive\n", filename);
 
     while (ptoc < status->tocend) {
         if (strcmp(ptoc->name, filename) == 0) {
-            if (pyi_arch_extract2fs(status, ptoc)) {
-                return -1;
-            }
+            return pyi_arch_extract2fs(status, ptoc);
         }
         ptoc = pyi_arch_increment_toc_ptr(status, ptoc);
     }
-    return 0;
+    return -1; /* Entry not found */
 }
 
 /* Decide if the dependency identified by item is in a onedir or onfile archive
@@ -200,51 +197,46 @@ _extract_dependency(ARCHIVE_STATUS *archive_pool[], const char *item)
 
     char dirname[PATH_MAX];
 
-    VS("LOADER: Extracting dependencies\n");
+    VS("LOADER: Extracting dependency/reference %s\n", item);
 
-    if (splitName(path, filename, item) == -1) {
+    if (_split_dependency_name(path, filename, item) == -1) {
         return -1;
     }
 
     pyi_path_dirname(dirname, path);
 
-    /* We need to identify three situations: 1) dependecies are in a onedir archive
-     * next to the current onefile archive, 2) dependencies are in a onedir/onefile
-     * archive next to the current onedir archive, 3) dependencies are in a onefile
-     * archive next to the current onefile archive.
+    /* We need to identify and handle three situations:
+     *  1) dependencies are in a onedir archive next to the current onefile archive,
+     *  2) dependencies are in a onedir/onefile archive next to the current onedir archive,
+     *  3) dependencies are in a onefile archive next to the current onefile archive.
      */
     VS("LOADER: Checking if file exists\n");
 
     /* TODO implement pyi_path_join to accept variable length of arguments for this case. */
-    if (checkFile(srcpath, "%s%s%s%s%s", archive_status->homepath, PYI_SEPSTR, dirname,
-                  PYI_SEPSTR, filename) == 0) {
-        VS("LOADER: File %s found, assuming is onedir\n", srcpath);
+    if (_format_and_check_path(srcpath, "%s%c%s%c%s", archive_status->homepath, PYI_SEP, dirname, PYI_SEP, filename) == 0) {
+        VS("LOADER: File %s found, assuming onedir reference\n", srcpath);
 
-        if (copyDependencyFromDir(archive_status, srcpath, filename) == -1) {
-            FATALERROR("Error copying %s\n", filename);
+        if (_copy_dependency_from_dir(archive_status, srcpath, filename) == -1) {
+            FATALERROR("Failed to copy %s\n", filename);
             return -1;
         }
         /* TODO implement pyi_path_join to accept variable length of arguments for this case. */
     }
-    else if (checkFile(srcpath, "%s%s%s%s%s%s%s", archive_status->homepath, PYI_SEPSTR,
-                       "..", PYI_SEPSTR, dirname, PYI_SEPSTR, filename) == 0) {
-        VS("LOADER: File %s found, assuming is onedir\n", srcpath);
+    else if (_format_and_check_path(srcpath, "%s%c%s%c%s%c%s", archive_status->homepath, PYI_SEP, "..", PYI_SEP, dirname, PYI_SEP, filename) == 0) {
+        VS("LOADER: File %s found, assuming onedir reference\n", srcpath);
 
-        if (copyDependencyFromDir(archive_status, srcpath, filename) == -1) {
-            FATALERROR("Error copying %s\n", filename);
+        if (_copy_dependency_from_dir(archive_status, srcpath, filename) == -1) {
+            FATALERROR("Failed to copy %s\n", filename);
             return -1;
         }
     }
     else {
-        VS("LOADER: File %s not found, assuming is onefile.\n", srcpath);
+        VS("LOADER: File %s not found, assuming onefile reference.\n", srcpath);
 
         /* TODO implement pyi_path_join to accept variable length of arguments for this case. */
-        if ((checkFile(archive_path, "%s%s%s.pkg", archive_status->homepath, PYI_SEPSTR,
-                       path) != 0) &&
-            (checkFile(archive_path, "%s%s%s.exe", archive_status->homepath, PYI_SEPSTR,
-                       path) != 0) &&
-            (checkFile(archive_path, "%s%s%s", archive_status->homepath, PYI_SEPSTR,
-                       path) != 0)) {
+        if ((_format_and_check_path(archive_path, "%s%c%s.pkg", archive_status->homepath, PYI_SEP, path) != 0) &&
+            (_format_and_check_path(archive_path, "%s%c%s.exe", archive_status->homepath, PYI_SEP, path) != 0) &&
+            (_format_and_check_path(archive_path, "%s%c%s", archive_status->homepath, PYI_SEP, path) != 0)) {
             FATALERROR("Archive not found: %s\n", archive_path);
             return -1;
         }
@@ -254,9 +246,12 @@ _extract_dependency(ARCHIVE_STATUS *archive_pool[], const char *item)
             return -1;
         }
 
-        if (extractDependencyFromArchive(status, filename) == -1) {
-            FATALERROR("Error extracting %s\n", filename);
-            pyi_arch_status_free(status);
+        if (_extract_dependency_from_archive(status, filename) == -1) {
+            FATALERROR("Failed to extract %s\n", filename);
+            /* Do not free the archive ("status") here, because its
+             * pointer is stored in the archive pool that is cleaned up
+             * by the caller.
+             */
             return -1;
         }
     }
@@ -294,12 +289,18 @@ pyi_launch_need_to_extract_binaries(ARCHIVE_STATUS *archive_status)
  * 'Multipackage' feature includes dependencies. Dependencies are files in other
  * .exe files. Having files in other executables allows share binary files among
  * executables and thus reduce the final size of the executable.
+ *
+ * 'Splash screen' feature is supported by passing a SPLASH_STATUS to this
+ * function. The parameter may be NULL, if not the name of the TOC is displayed
+ * on the splash screen asynchronously.
  */
 int
-pyi_launch_extract_binaries(ARCHIVE_STATUS *archive_status)
+pyi_launch_extract_binaries(ARCHIVE_STATUS *archive_status, SPLASH_STATUS *splash_status)
 {
     int retcode = 0;
     ptrdiff_t index = 0;
+    /* We create this cache variable for faster execution time */
+    bool update_text = (splash_status != NULL);
 
     /*
      * archive_pool[0] is reserved for the main process, the others for dependencies.
@@ -308,7 +309,7 @@ pyi_launch_extract_binaries(ARCHIVE_STATUS *archive_status)
     TOC * ptoc = archive_status->tocbuff;
 
     /* Clean memory for archive_pool list. */
-    memset(&archive_pool, 0, _MAX_ARCHIVE_POOL_LEN * sizeof(ARCHIVE_STATUS *));
+    memset(archive_pool, 0, _MAX_ARCHIVE_POOL_LEN * sizeof(ARCHIVE_STATUS *));
 
     /* Current process is the 1st item. */
     archive_pool[0] = archive_status;
@@ -318,6 +319,13 @@ pyi_launch_extract_binaries(ARCHIVE_STATUS *archive_status)
     while (ptoc < archive_status->tocend) {
         if (ptoc->typcd == ARCHIVE_ITEM_BINARY || ptoc->typcd == ARCHIVE_ITEM_DATA ||
             ptoc->typcd == ARCHIVE_ITEM_ZIPFILE) {
+            /* 'Splash screen' feature */
+            if (update_text) {
+                /* Update the text on the splash screen if one is available */
+                pyi_splash_update_prg(splash_status, ptoc);
+            }
+
+            /* Extract the file to the disk */
             if (pyi_arch_extract2fs(archive_status, ptoc)) {
                 retcode = -1;
                 break;  /* No need to extract other items in case of error. */
@@ -348,6 +356,10 @@ pyi_launch_extract_binaries(ARCHIVE_STATUS *archive_status)
     return retcode;
 }
 
+
+/* These helper functions are used only in windowed bootloader variants. */
+#if defined(WINDOWED)
+
 /*
  * Extract python exception message (string representation) from pvalue
  * part of the error indicator data returned by PyErr_Fetch().
@@ -365,10 +377,25 @@ _pyi_extract_exception_message(PyObject *pvalue)
     if (pvalue_cchar) {
         retval = strdup(pvalue_cchar);
     }
-    Py_DECREF(pvalue_str);
+    PI_Py_DecRef(pvalue_str);
 
     return retval;
 }
+
+/*
+ * Traceback formatting options for _pyi_extract_exception_traceback.
+ */
+enum
+{
+    /* String representation of the list containing traceback lines. */
+    PYI_TB_FMT_REPR = 0,
+    /* Concatenate the traceback lines into single string, using
+     * default LF newlines. */
+    PYI_TB_FMT_LF = 1,
+    /* Concatenate the traceback lines into single string, and replace
+     * the LF newlines with CRLF. */
+    PYI_TB_FMT_CRLF = 2
+};
 
 /*
  * Extract python exception traceback from error indicator data
@@ -377,7 +404,7 @@ _pyi_extract_exception_message(PyObject *pvalue)
  */
 static char *
 _pyi_extract_exception_traceback(PyObject *ptype, PyObject *pvalue,
-                                 PyObject *ptraceback)
+                                 PyObject *ptraceback, int fmt_mode)
 {
     PyObject *module;
     char *retval = NULL;
@@ -388,24 +415,50 @@ _pyi_extract_exception_traceback(PyObject *ptype, PyObject *pvalue,
     if (module != NULL) {
         PyObject *func = PI_PyObject_GetAttrString(module, "format_exception");
         if (func) {
-            PyObject *tb, *tb_str;
-            const char *tb_cchar;
+            PyObject *tb = NULL;
+            PyObject *tb_str = NULL;
+            const char *tb_cchar = NULL;
             tb = PI_PyObject_CallFunctionObjArgs(func, ptype, pvalue,
                                                  ptraceback, NULL);
-            tb_str = PI_PyObject_Str(tb);
-            tb_cchar = PI_PyUnicode_AsUTF8(tb_str);
-            if (tb_cchar) {
-                retval = strdup(tb_cchar);
+            if (tb != NULL) {
+                if (fmt_mode == PYI_TB_FMT_REPR) {
+                    /* Represent the list as string */
+                    tb_str = PI_PyObject_Str(tb);
+                } else {
+                    /* Join the list using empty string */
+                    PyObject *tb_empty = PI_PyUnicode_FromString("");
+                    tb_str = PI_PyUnicode_Join(tb_empty, tb);
+                    PI_Py_DecRef(tb_empty);
+                    if (fmt_mode == PYI_TB_FMT_CRLF) {
+                        /* Replace LF with CRLF */
+                        PyObject *lf = PI_PyUnicode_FromString("\n");
+                        PyObject *crlf = PI_PyUnicode_FromString("\r\n");
+                        PyObject *tb_str_crlf = PI_PyUnicode_Replace(tb_str, lf, crlf, -1);
+                        PI_Py_DecRef(lf);
+                        PI_Py_DecRef(crlf);
+                        /* Swap */
+                        PI_Py_DecRef(tb_str);
+                        tb_str = tb_str_crlf;
+                    }
+                }
             }
-            Py_DECREF(tb);
-            Py_DECREF(tb_str);
+            if (tb_str != NULL) {
+                tb_cchar = PI_PyUnicode_AsUTF8(tb_str);
+                if (tb_cchar) {
+                    retval = strdup(tb_cchar);
+                }
+            }
+            PI_Py_DecRef(tb);
+            PI_Py_DecRef(tb_str);
         }
-        Py_DECREF(func);
+        PI_Py_DecRef(func);
     }
-    Py_DECREF(module);
+    PI_Py_DecRef(module);
 
     return retval;
 }
+
+#endif /* if defined(WINDOWED) */
 
 /*
  * Run scripts
@@ -425,14 +478,14 @@ pyi_launch_run_scripts(ARCHIVE_STATUS *status)
     __main__ = PI_PyImport_AddModule("__main__");
 
     if (!__main__) {
-        FATALERROR("Could not get __main__ module.");
+        FATALERROR("Could not get __main__ module.\n");
         return -1;
     }
 
     main_dict = PI_PyModule_GetDict(__main__);
 
     if (!main_dict) {
-        FATALERROR("Could not get __main__ module's dict.");
+        FATALERROR("Could not get __main__ module's dict.\n");
         return -1;
     }
 
@@ -450,16 +503,21 @@ pyi_launch_run_scripts(ARCHIVE_STATUS *status)
             VS("LOADER: Running %s.py\n", ptoc->name);
             __file__ = PI_PyUnicode_FromString(buf);
             PI_PyObject_SetAttrString(__main__, "__file__", __file__);
-            Py_DECREF(__file__);
+            PI_Py_DecRef(__file__);
 
             /* Unmarshall code object */
             code = PI_PyMarshal_ReadObjectFromString((const char *) data, ptoc->ulen);
-
             if (!code) {
                 FATALERROR("Failed to unmarshal code object for %s\n", ptoc->name);
                 PI_PyErr_Print();
                 return -1;
             }
+
+            /* Store the code object to __main__ module's _pyi_main_co
+             * attribute, so it can be retrieved by PyiFrozenImporter,
+             * if necessary. */
+            PI_PyObject_SetAttrString(__main__, "_pyi_main_co", code);
+
             /* Run it */
             retval = PI_PyEval_EvalCode(code, main_dict, main_dict);
 
@@ -467,9 +525,10 @@ pyi_launch_run_scripts(ARCHIVE_STATUS *status)
              * (Since we evaluate module-level code, which is not allowed to return an
              * object, the Python object returned is always None.) */
             if (!retval) {
-                #if defined(WINDOWED) && defined(LAUNCH_DEBUG)
-                    /* In windowed mode, we will display error details in
-                     * dialogs. For that, we need to extract the error
+                #if defined(WINDOWED)
+                    /* In windowed mode, we need to display error information
+                     * via non-console means (i.e., error dialog on Windows,
+                     * syslog on macOS). For that, we need to extract the error
                      * indicator data before PyErr_Print() call below clears
                      * it. But it seems that for PyErr_Print() to properly
                      * exit on SystemExit(), we also need to restore the error
@@ -479,35 +538,55 @@ pyi_launch_run_scripts(ARCHIVE_STATUS *status)
                      */
                     PyObject *ptype, *pvalue, *ptraceback;
                     char *msg_exc, *msg_tb;
+                    int fmt_mode = PYI_TB_FMT_REPR;
+
+                    #if defined(_WIN32)
+                        fmt_mode = PYI_TB_FMT_CRLF;
+                    #elif defined(__APPLE__)
+                        fmt_mode = PYI_TB_FMT_LF;
+                    #endif
 
                     PI_PyErr_Fetch(&ptype, &pvalue, &ptraceback);
+                    PI_PyErr_NormalizeException(&ptype, &pvalue, &ptraceback);
                     msg_exc = _pyi_extract_exception_message(pvalue);
-                    msg_tb = _pyi_extract_exception_traceback(ptype, pvalue,
-                                                              ptraceback);
+                    if (pyi_arch_get_option(status, "pyi-disable-windowed-traceback") != NULL) {
+                        /* Traceback is disabled via option */
+                        msg_tb = strdup("Traceback is disabled via bootloader option.");
+                    } else {
+                        msg_tb = _pyi_extract_exception_traceback(
+                            ptype, pvalue, ptraceback, fmt_mode);
+                    }
                     PI_PyErr_Restore(ptype, pvalue, ptraceback);
                 #endif
 
                 /* If the error was SystemExit, PyErr_Print calls exit() without
-                 * returning. This means we won't print "Failed to execute" on 
+                 * returning. This means we won't print "Failed to execute" on
                  * normal SystemExit's.
                  */
                 PI_PyErr_Print();
-                FATALERROR("Failed to execute script %s\n", ptoc->name);
 
-                #if defined(WINDOWED) && defined(LAUNCH_DEBUG)
-                    /* As console is unavailable in windowed mode, we display
-                     * error details (exception message and traceback) in
-                     * additional error dialogs (Windows only).
-                     */
-                    if (msg_exc) {
-                        FATALERROR("Error: %s\n", msg_exc);
-                        free(msg_exc);
-                    }
-                    if (msg_tb) {
-                        FATALERROR("Traceback: %s\n", msg_tb);
-                        free(msg_tb);
-                    }
-                #endif /* if defined(WINDOWED) and defined(LAUNCH_DEBUG) */
+                /* Display error information */
+                #if !defined(WINDOWED)
+                    /* Non-windowed mode; PyErr_print() above dumps the
+                     * traceback, so the only thing we need to do here
+                     * is provide a summary */
+                     FATALERROR("Failed to execute script '%s' due to unhandled exception!\n", ptoc->name);
+                #else
+                    #if defined(_WIN32)
+                        /* Windows; use custom dialog */
+                        pyi_unhandled_exception_dialog(ptoc->name, msg_exc, msg_tb);
+                    #elif defined(__APPLE__)
+                        /* macOS .app bundle; use FATALERROR(), which
+                         * prints to stderr (invisible) as well as sends
+                         * the message to syslog */
+                         FATALERROR("Failed to execute script '%s' due to unhandled exception: %s\n", ptoc->name, msg_exc);
+                         FATALERROR("Traceback:\n%s\n", msg_tb);
+                    #endif
+
+                    /* Clean up exception information strings */
+                    free(msg_exc);
+                    free(msg_tb);
+                #endif /* if !defined(WINDOWED) */
 
                 /* Be consistent with python interpreter, which returns
                  * 1 if it exits due to unhandled exception.
@@ -522,82 +601,10 @@ pyi_launch_run_scripts(ARCHIVE_STATUS *status)
     return 0;
 }
 
-/*
- * call a simple "int func(void)" entry point.  Assumes such a function
- * exists in the main namespace.
- * Return non zero on failure, with -2 if the specific error is
- * that the function does not exist in the namespace.
- */
-int
-callSimpleEntryPoint(char *name, int *presult)
-{
-    int rc = -1;
-    /* Objects with no ref. */
-    PyObject *mod, *dict;
-    /* Objects with refs to kill. */
-    PyObject *func = NULL, *pyresult = NULL;
-
-    mod = PI_PyImport_AddModule("__main__");  /* NO ref added */
-
-    if (!mod) {
-        VS("LOADER: No __main__\n");
-        goto done;
-    }
-    dict = PI_PyModule_GetDict(mod);  /* NO ref added */
-
-    if (!mod) {
-        VS("LOADER: No __dict__\n");
-        goto done;
-    }
-    func = PI_PyDict_GetItemString(dict, name);
-
-    if (func == NULL) {  /* should explicitly check KeyError */
-        VS("LOADER: CallSimpleEntryPoint can't find the function name\n");
-        rc = -2;
-        goto done;
-    }
-    pyresult = PI_PyObject_CallFunction(func, "");
-
-    if (pyresult == NULL) {
-        goto done;
-    }
-    PI_PyErr_Clear();
-    *presult = PI_PyLong_AsLong(pyresult);
-    rc = PI_PyErr_Occurred() ? -1 : 0;
-    VS( rc ? "LOADER: Finished with failure\n" : "LOADER: Finished OK\n");
-    /* all done! */
-done:
-    Py_XDECREF(func);
-    Py_XDECREF(pyresult);
-
-    /* can't leave Python error set, else it may
-     *  cause failures in later async code */
-    if (rc) {
-        /* But we will print them 'cos they may be useful */
-        PI_PyErr_Print();
-    }
-    PI_PyErr_Clear();
-    return rc;
-}
-
-/* For finer grained control. */
-
 void
 pyi_launch_initialize(ARCHIVE_STATUS * status)
 {
-#if defined(_WIN32)
-    char * manifest;
-    manifest = pyi_arch_get_option(status, "pyi-windows-manifest-filename");
-
-    if (NULL != manifest) {
-        char manifest_path[PATH_MAX];
-        if (pyi_path_join(manifest_path, status->mainpath, manifest) == NULL) {
-            FATALERROR("Path of manifest-file (%s) length exceeds "
-                       "buffer[%d] space\n", status->mainpath, PATH_MAX);
-        };
-        CreateActContext(manifest_path);
-    }
-#endif /* if defined(_WIN32) */
+    /* Nothing to do here at the moment. */
 }
 
 /*

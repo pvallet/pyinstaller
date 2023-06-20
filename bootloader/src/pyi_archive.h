@@ -1,6 +1,6 @@
 /*
  * ****************************************************************************
- * Copyright (c) 2013-2021, PyInstaller Development Team.
+ * Copyright (c) 2013-2023, PyInstaller Development Team.
  *
  * Distributed under the terms of the GNU General Public License (version 2
  * or later) with exception for distributing the bootloader.
@@ -32,6 +32,7 @@
 #define ARCHIVE_ITEM_PYSOURCE         's'  /* Python script (v3) */
 #define ARCHIVE_ITEM_DATA             'x'  /* data */
 #define ARCHIVE_ITEM_RUNTIME_OPTION   'o'  /* runtime option */
+#define ARCHIVE_ITEM_SPLASH           'l'  /* splash resources */
 
 /* TOC entry for a CArchive */
 typedef struct _toc {
@@ -74,6 +75,7 @@ typedef struct _archive_status {
      *    (formerly called _Py_char2wchar) first.
      */
     char archivename[PATH_MAX];
+    char executablename[PATH_MAX];
     char homepath[PATH_MAX];
     char temppath[PATH_MAX];
     /*
@@ -130,15 +132,17 @@ void pyi_arch_status_free(ARCHIVE_STATUS *status);
 /*
  * Setup the paths and open the archive
  *
- * @param archivePath  The path including filename to the archive.
+ * @param archive_path  The path including filename to the archive (can be different from executable path).
+ * @param executable_path  The path including filename to the executable.
  *
  * @return true on success, false otherwise.
  */
-bool pyi_arch_setup(ARCHIVE_STATUS *status, char const * archivePath);
+bool pyi_arch_setup(ARCHIVE_STATUS *status, char const * archive_path, char const * executable_path);
 
 TOC *getFirstTocEntry(ARCHIVE_STATUS *status);
 TOC *getNextTocEntry(ARCHIVE_STATUS *status, TOC *entry);
 
 char * pyi_arch_get_option(const ARCHIVE_STATUS * status, char * optname);
+TOC *pyi_arch_find_by_name(ARCHIVE_STATUS *status, const char *name);
 
 #endif  /* PYI_ARCHIVE_H */

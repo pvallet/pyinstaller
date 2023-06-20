@@ -1,5 +1,5 @@
 #-----------------------------------------------------------------------------
-# Copyright (c) 2013-2021, PyInstaller Development Team.
+# Copyright (c) 2013-2023, PyInstaller Development Team.
 #
 # Distributed under the terms of the GNU General Public License (version 2
 # or later) with exception for distributing the bootloader.
@@ -10,7 +10,8 @@
 #-----------------------------------------------------------------------------
 
 import pkgutil
-import pkg3
+
+import pkg3  # noqa: F401
 
 expected_data = 'This is data text for testing the packaging module data.'.encode('ascii')
 
